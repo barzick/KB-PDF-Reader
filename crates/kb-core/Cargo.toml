@@ -13,5 +13,6 @@ fontdb = "0.24"
 ureq = "2"
 ttf-parser = "0.25"
 lopdf = "0.38"
+similar = "2"
 
 [dev-dependencies]

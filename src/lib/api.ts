@@ -53,6 +53,11 @@ export interface TextBlock {
   line_height: number
   font: string
   color: [number, number, number, number]
+  /** Distinct styles (font, size, colour) used in the paragraph. */
+  styles: { font: string; size: number; color: [number, number, number, number] }[]
+  /** Style index of each character of `text`. */
+  char_styles: number[]
+  justified: boolean
 }
 
 export type EditMode = 'exact' | 'shift_below'

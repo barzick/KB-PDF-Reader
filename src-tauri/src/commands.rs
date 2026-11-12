@@ -285,42 +285,59 @@ pub async fn edit_block(
   let cache = app.path().app_data_dir().map_err(|e| e.to_string())?.join("fonts");
   let shared = fonts.0.clone();
   let (result, font_label) = tauri::async_runtime::spawn_blocking(move || {
-    let usage = kb_core::fonts(&bytes)
-      .ok()
-      .and_then(|all| all.into_iter().find(|f| f.raw_name == block.font))
-      .unwrap_or_else(|| FontUsage {
-        family: kb_core::normalize_font_name(&block.font),
-        raw_name: block.font.clone(),
+    let used = kb_core::fonts(&bytes).unwrap_or_default();
+    // One font per style run (bold, italic… parts of the paragraph).
+    let mut names: Vec<String> = block.styles.iter().map(|s| s.font.clone()).collect();
+    if names.is_empty() {
+      names.push(block.font.clone());
+    }
+    let mut picks: Vec<(Option<String>, bool, bool, StandardFamily, String)> = Vec::new();
+    for name in &names {
+      let usage = used.iter().find(|f| &f.raw_name == name).cloned().unwrap_or_else(|| FontUsage {
+        family: kb_core::normalize_font_name(name),
+        raw_name: name.clone(),
         embedded: false,
-        bold: kb_core::weight_from_name(&block.font) >= 600,
-        italic: block.font.to_lowercase().contains("italic"),
-        weight: kb_core::weight_from_name(&block.font),
+        bold: kb_core::weight_from_name(name) >= 600,
+        italic: name.to_lowercase().contains("italic") || name.to_lowercase().contains("oblique"),
+        weight: kb_core::weight_from_name(name),
         pages: vec![page + 1],
       });
-    let resolution = {
-      let mut guard = shared.lock();
-      let resolver = guard.get_or_insert_with(|| FontResolver::new(&cache, online));
-      resolver.set_online(online);
-      resolver.resolve(&usage)
-    };
-    let (path, label) = match &resolution.source {
-      FontSource::System { path } | FontSource::Downloaded { path } => (Some(path.clone()), resolution.family.clone()),
-      FontSource::Substitute { family, path, .. } => (Some(path.clone()), format!("{family} (remplace {})", resolution.family)),
-      FontSource::Missing => (None, format!("police standard (remplace {})", resolution.family)),
-    };
-    let lower = resolution.family.to_lowercase();
-    let family = if lower.contains("mono") || lower.contains("courier") {
-      StandardFamily::Mono
-    } else if lower.contains("times") || lower.contains("serif") && !lower.contains("sans") {
-      StandardFamily::Serif
-    } else {
-      StandardFamily::Sans
-    };
-    let font = match &path {
-      Some(p) => WriteFont::File(std::path::Path::new(p)),
-      None => WriteFont::Standard { bold: resolution.weight >= 600, italic: resolution.italic, family },
-    };
-    kb_core::replace_block(&bytes, page, &block, &text, font, mode)
+      let resolution = {
+        let mut guard = shared.lock();
+        let resolver = guard.get_or_insert_with(|| FontResolver::new(&cache, online));
+        resolver.set_online(online);
+        resolver.resolve(&usage)
+      };
+      let (path, label) = match &resolution.source {
+        FontSource::System { path } | FontSource::Downloaded { path } => (Some(path.clone()), resolution.family.clone()),
+        FontSource::Substitute { family, path, .. } => (Some(path.clone()), format!("{family} (remplace {})", resolution.family)),
+        FontSource::Missing => (None, format!("police standard (remplace {})", resolution.family)),
+      };
+      let lower = resolution.family.to_lowercase();
+      let family = if lower.contains("mono") || lower.contains("courier") {
+        StandardFamily::Mono
+      } else if lower.contains("times") || lower.contains("serif") && !lower.contains("sans") {
+        StandardFamily::Serif
+      } else {
+        StandardFamily::Sans
+      };
+      picks.push((path, resolution.weight >= 600, resolution.italic, family, label));
+    }
+    let mut labels: Vec<String> = Vec::new();
+    for p in &picks {
+      if !labels.contains(&p.4) {
+        labels.push(p.4.clone());
+      }
+    }
+    let label = labels.join(", ");
+    let fonts: Vec<WriteFont> = picks
+      .iter()
+      .map(|(path, bold, italic, family, _)| match path {
+        Some(p) => WriteFont::File(std::path::Path::new(p)),
+        None => WriteFont::Standard { bold: *bold, italic: *italic, family: *family },
+      })
+      .collect();
+    kb_core::replace_block(&bytes, page, &block, &text, fonts, mode)
       .map(|r| (r, label))
       .map_err(|e| e.to_string())
   })

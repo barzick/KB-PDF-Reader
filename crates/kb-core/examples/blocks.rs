@@ -7,7 +7,7 @@ fn main() {
     let bytes = std::fs::read(path).unwrap();
     for (i, b) in kb_core::text_blocks(&bytes, page).unwrap().iter().enumerate() {
         let preview: String = b.text.replace('\n', "⏎").chars().take(60).collect();
-        println!("{i:>3} l={} obj={:<3} x={:>5.1} y={:>5.1} w={:>5.1} t={:>4.1} lh={:>4.1} {:<22} « {preview} »",
-            b.lines, b.objects.len(), b.x, b.y, b.right - b.x, b.size, b.line_height, b.font);
+        println!("{i:>3} st={} j={} l={} obj={:<3} x={:>5.1} y={:>5.1} w={:>5.1} t={:>4.1} lh={:>4.1} {:<22} « {preview} »",
+            b.styles.len(), b.justified as u8, b.lines, b.objects.len(), b.x, b.y, b.right - b.x, b.size, b.line_height, b.font);
     }
 }

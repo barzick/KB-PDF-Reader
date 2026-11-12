@@ -83,7 +83,7 @@ fn edit_paragraph_exactly_and_again() {
     assert_eq!(blocks[0].text, "Bonjour le monde");
 
     let font = any_ttf();
-    let r = replace_block(&doc, 0, &blocks[0], "Au revoir, été 2026", WriteFont::File(font.as_ref()), EditMode::Exact).unwrap();
+    let r = replace_block(&doc, 0, &blocks[0], "Au revoir, été 2026", vec![WriteFont::File(font.as_ref())], EditMode::Exact).unwrap();
     assert!(r.lossless, "l'édition doit garder le reste de la page intact");
     let after = text_blocks(&r.bytes, 0).unwrap();
     assert_eq!(after.len(), 1);
@@ -91,7 +91,7 @@ fn edit_paragraph_exactly_and_again() {
     assert!((after[0].y - blocks[0].y).abs() < 0.5, "même position");
 
     // The new text must be editable again.
-    let r2 = replace_block(&r.bytes, 0, &after[0], "Troisième version", WriteFont::File(font.as_ref()), EditMode::Exact).unwrap();
+    let r2 = replace_block(&r.bytes, 0, &after[0], "Troisième version", vec![WriteFont::File(font.as_ref())], EditMode::Exact).unwrap();
     assert!(r2.lossless);
     let again = text_blocks(&r2.bytes, 0).unwrap();
     assert_eq!(again.iter().map(|b| b.text.as_str()).collect::<Vec<_>>(), vec!["Troisième version"]);
@@ -105,7 +105,7 @@ fn shift_below_moves_following_text() {
     let blocks = text_blocks(&doc, 0).unwrap();
     let long = "mot ".repeat(200);
     let font = any_ttf();
-    let r = replace_block(&doc, 0, &blocks[0], &long, WriteFont::File(font.as_ref()), EditMode::ShiftBelow).unwrap();
+    let r = replace_block(&doc, 0, &blocks[0], &long, vec![WriteFont::File(font.as_ref())], EditMode::ShiftBelow).unwrap();
     assert!(r.extra_lines > 0);
     assert!(!r.lossless);
 }
@@ -128,7 +128,7 @@ fn edit_page_with_several_content_streams() {
     let blocks = text_blocks(&bytes, 0).unwrap();
     assert_eq!(blocks.len(), 2);
 
-    let r = replace_block(&bytes, 0, &blocks[1], "Texte remplacé.", WriteFont::File(any_ttf().as_ref()), EditMode::Exact).unwrap();
+    let r = replace_block(&bytes, 0, &blocks[1], "Texte remplacé.", vec![WriteFont::File(any_ttf().as_ref())], EditMode::Exact).unwrap();
     assert!(r.lossless);
     let texts: Vec<String> = text_blocks(&r.bytes, 0).unwrap().into_iter().map(|b| b.text).collect();
     assert_eq!(texts, vec!["Titre".to_string(), "Texte remplacé.".to_string()]);

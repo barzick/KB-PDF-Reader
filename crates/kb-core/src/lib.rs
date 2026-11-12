@@ -15,7 +15,7 @@ use serde::Serialize;
 mod edit;
 mod fonts;
 mod surgery;
-pub use edit::{replace_block, text_blocks, EditMode, EditResult, StandardFamily, TextBlock, WriteFont};
+pub use edit::{replace_block, text_blocks, EditMode, EditResult, RunStyle, StandardFamily, TextBlock, WriteFont};
 pub use fonts::{normalize_font_name, weight_from_name, FontResolver, FontSource, FontUsage, Resolution};
 
 #[derive(Debug, thiserror::Error)]
