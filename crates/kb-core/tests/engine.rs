@@ -133,3 +133,64 @@ fn edit_page_with_several_content_streams() {
     let texts: Vec<String> = text_blocks(&r.bytes, 0).unwrap().into_iter().map(|b| b.text).collect();
     assert_eq!(texts, vec!["Titre".to_string(), "Texte remplacé.".to_string()]);
 }
+
+/// Turns a text document into a "scan" (one image per page).
+fn scan_of(pdf: &[u8]) -> Vec<u8> {
+    let n = info(pdf).unwrap().page_count;
+    let pngs: Vec<Vec<u8>> = (0..n).map(|p| render_png(pdf, p, 2480).unwrap()).collect();
+    let refs: Vec<&[u8]> = pngs.iter().map(|v| v.as_slice()).collect();
+    images_to_pdf(&refs, PageFormat::A4, 0.0).unwrap()
+}
+
+#[test]
+fn images_and_blank_pages() {
+    setup();
+    let scan = scan_of(&new_text_document(&["Une page", "Deux pages"]).unwrap());
+    let i = info(&scan).unwrap();
+    assert_eq!(i.page_count, 2);
+    assert!((i.pages[0].width - 595.0).abs() < 1.0 && (i.pages[0].height - 842.0).abs() < 1.0);
+    let blank = blank_document(3, PageFormat::Letter, true).unwrap();
+    let i = info(&blank).unwrap();
+    assert_eq!(i.page_count, 3);
+    assert!((i.pages[0].width - 792.0).abs() < 1.0);
+}
+
+#[cfg(feature = "ocr")]
+#[test]
+fn ocr_makes_scans_searchable_and_editable() {
+    setup();
+    let tessdata = std::env::var("TESSDATA_DIR")
+        .map(PathBuf::from)
+        .unwrap_or_else(|_| PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../src-tauri/tessdata"));
+    if !tessdata.join("fra.traineddata").exists() {
+        eprintln!("tessdata absent ({}) : test OCR ignoré", tessdata.display());
+        return;
+    }
+    let scan = scan_of(&new_text_document(&["Facture numéro 2026", "Merci beaucoup"]).unwrap());
+    assert_eq!(scanned_pages(&scan).unwrap(), vec![0, 1]);
+    assert!(text_blocks(&scan, 0).unwrap().is_empty());
+
+    let mut calls = 0;
+    let (out, summary) = make_searchable(&scan, None, &tessdata, "fra+eng", |_, _| calls += 1).unwrap();
+    assert_eq!(calls, 2);
+    assert_eq!(summary.pages, vec![1, 2]);
+    assert!(summary.confidence > 70.0, "{summary:?}");
+    assert!(scanned_pages(&out).unwrap().is_empty());
+
+    // The page looks exactly the same (the text layer is invisible).
+    let (before, after) = (render_png(&scan, 0, 600).unwrap(), render_png(&out, 0, 600).unwrap());
+    assert!(before == after, "la couche OCR ne doit pas être visible");
+
+    let blocks = text_blocks(&out, 0).unwrap();
+    assert!(blocks.iter().all(|b| b.scanned));
+    let text: String = blocks.iter().map(|b| b.text.as_str()).collect::<Vec<_>>().join(" ");
+    assert!(text.contains("Facture") && text.contains("2026"), "{text}");
+    // The text layer sits where the words are printed (y ≈ 760).
+    let b = blocks.iter().find(|b| b.text.contains("Facture")).unwrap();
+    assert!((b.y - 760.0).abs() < 4.0 && (b.x - 72.0).abs() < 4.0, "x={} y={}", b.x, b.y);
+    assert!((b.size - 24.0).abs() < 4.0, "size={}", b.size);
+
+    // Running it again changes nothing (pages already have text).
+    let (_, again) = make_searchable(&out, None, &tessdata, "fra", |_, _| {}).unwrap();
+    assert!(again.pages.is_empty() && again.skipped == vec![1, 2]);
+}

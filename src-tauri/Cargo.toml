@@ -26,3 +26,7 @@ tauri-plugin-log = "2"
 tauri-plugin-dialog = "2"
 kb-core = { path = "../crates/kb-core" }
 parking_lot = "0.12"
+
+[features]
+# Use the Tesseract installed on the machine (dev containers without GitHub access).
+system-tesseract = ["kb-core/system-tesseract"]

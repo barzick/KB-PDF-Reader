@@ -28,6 +28,8 @@ struct Fragment {
     size: f32,
     font: String,
     color: [u8; 4],
+    /// Invisible text (e.g. the OCR layer of a scanned page).
+    invisible: bool,
 }
 
 #[derive(Debug, Clone, Serialize, serde::Deserialize)]
@@ -59,6 +61,10 @@ pub struct TextBlock {
     pub char_styles: Vec<u16>,
     /// Lines are stretched to both margins (except the last one).
     pub justified: bool,
+    /// Text recognised on a scanned page (invisible OCR layer): editing it
+    /// covers the scanned words and writes the new text visibly.
+    #[serde(default)]
+    pub scanned: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, serde::Deserialize)]
@@ -99,6 +105,7 @@ fn fragments(page: &PdfPage) -> Vec<Fragment> {
             size: t.scaled_font_size().value.max(1.0),
             font: t.font().name(),
             color: [c.red(), c.green(), c.blue(), c.alpha()],
+            invisible: !t.is_visible(),
         });
     }
     out
@@ -276,6 +283,7 @@ fn build_blocks(lines: Vec<Line>, page_width: f32) -> Vec<TextBlock> {
                 styles,
                 char_styles,
                 justified,
+                scanned: all().all(|f| f.invisible),
             }
         })
         .collect()
@@ -632,7 +640,9 @@ pub fn replace_block(
     // Wrap within the paragraph width; a single line may grow up to the right margin.
     let original_width = block.right - block.x;
     let max_width = if block.lines > 1 {
-        original_width * 1.01
+        // OCR boxes are approximate and the substitute font rarely has the
+        // scanned font's exact widths: allow a little more room on scans.
+        original_width * if block.scanned { 1.06 } else { 1.01 }
     } else {
         (page_w - block.x - 36.0).max(original_width)
     };
@@ -645,12 +655,35 @@ pub fn replace_block(
     let lines = layout(new_text, &styles, max_width, &sizes, &measure_refs, block.justified);
     let extra_lines = lines.len() as i32 - block.lines as i32;
 
+    // Scanned page: hide the scanned words under a patch of paper colour and
+    // write the new text visibly, in the ink colour. (Nothing can be shifted
+    // on a scan, so it is always an exact edit.)
+    let mut owned;
+    let (block, cover) = if block.scanned {
+        let (rect, paper, ink) = scan_colors(bytes, page_index, block)?;
+        owned = block.clone();
+        owned.color = ink;
+        for st in owned.styles.iter_mut() {
+            st.color = ink;
+        }
+        (&owned, Some((rect, paper)))
+    } else {
+        (block, None)
+    };
+    let mode = if cover.is_some() { EditMode::Exact } else { mode };
+
     if mode == EditMode::Exact {
         // New text drawn on an empty page of the same size, then merged in.
         let mut scratch = pdfium.create_new_pdf()?;
         scratch
             .pages_mut()
             .create_page_at_end(PdfPagePaperSize::Custom(PdfPoints::new(page_w), PdfPoints::new(page_h)))?;
+        if let Some((rect, paper)) = cover {
+            let mut page = scratch.pages().get(0)?;
+            page.set_content_regeneration_strategy(PdfPageContentRegenerationStrategy::Manual);
+            page.objects_mut().create_path_object_rect(rect, None, None, Some(paper))?;
+            page.regenerate_content()?;
+        }
         write_lines(&mut scratch, 0, block, &lines, &fonts)?;
         let overlay = scratch.save_to_bytes()?;
         match crate::surgery::remove_and_overlay(bytes, page_index, &block.ordinals, text_count, Some(&overlay)) {
@@ -659,8 +692,74 @@ pub fn replace_block(
         }
     }
 
+    if cover.is_some() {
+        return Err(KbError::Pdf("modification impossible sur cette page scannée".into()));
+    }
     let out = rewrite_page(bytes, page_index, block, &lines, &fonts)?;
     Ok(EditResult { bytes: out, lossless: false, extra_lines })
+}
+
+/// For a paragraph of a scanned page: the area to cover, the paper colour
+/// around it and the colour of the ink inside it.
+fn scan_colors(bytes: &[u8], page_index: u32, block: &TextBlock) -> Result<(PdfRect, PdfColor, [u8; 4])> {
+    let doc = crate::open(bytes)?;
+    let page = doc.pages().get(page_index as PdfPageIndex).map_err(|_| KbError::BadPage(page_index + 1))?;
+    let (page_w, page_h) = (page.width().value, page.height().value);
+    let pad_v = 0.2 * block.size;
+    let (l, r) = (block.left - 1.5, block.right + 1.5);
+    let (b, t) = (block.bottom - pad_v, block.top + pad_v);
+    let rect = PdfRect::new_from_values(b, l, t, r);
+
+    let k = 2.0_f32; // pixels per point
+    let img = page
+        .render_with_config(&PdfRenderConfig::new().set_target_width((page_w * k).round() as Pixels))?
+        .as_image()?
+        .to_rgb8();
+    let (iw, ih) = (img.width() as i64, img.height() as i64);
+    let px = |x: f32| ((x * k) as i64).clamp(0, iw - 1);
+    let py = |y: f32| (((page_h - y) * k) as i64).clamp(0, ih - 1);
+    let median = |mut v: Vec<u8>| -> u8 {
+        if v.is_empty() {
+            return 255;
+        }
+        v.sort_unstable();
+        v[v.len() / 2]
+    };
+
+    // Paper: a 3 pt ring around the area.
+    let ring = 3.0;
+    let (mut rs, mut gs, mut bs) = (vec![], vec![], vec![]);
+    for y in py(t + ring)..=py(b - ring) {
+        for x in px(l - ring)..=px(r + ring) {
+            let inside = x >= px(l) && x <= px(r) && y >= py(t) && y <= py(b);
+            if !inside {
+                let p = img.get_pixel(x as u32, y as u32).0;
+                rs.push(p[0]);
+                gs.push(p[1]);
+                bs.push(p[2]);
+            }
+        }
+    }
+    let paper = [median(rs), median(gs), median(bs)];
+
+    // Ink: the darkest pixels inside.
+    let mut inside: Vec<[u8; 3]> = vec![];
+    for y in py(t)..=py(b) {
+        for x in px(l)..=px(r) {
+            inside.push(img.get_pixel(x as u32, y as u32).0);
+        }
+    }
+    let luma = |p: &[u8; 3]| 0.299 * p[0] as f32 + 0.587 * p[1] as f32 + 0.114 * p[2] as f32;
+    inside.sort_by(|a, b| luma(a).total_cmp(&luma(b)));
+    let dark = &inside[..(inside.len() / 20).max(1).min(inside.len())];
+    let ink = [
+        median(dark.iter().map(|p| p[0]).collect()),
+        median(dark.iter().map(|p| p[1]).collect()),
+        median(dark.iter().map(|p| p[2]).collect()),
+    ];
+    // Too little contrast (nearly empty area): plain black.
+    let ink = if (luma(&paper) - luma(&ink)).abs() < 60.0 { [0, 0, 0] } else { ink };
+    Ok((rect, PdfColor::new(paper[0], paper[1], paper[2], 255), [ink[0], ink[1], ink[2], 255]))
 }
 
 /// Fallback / "shift below" mode: PDFium rewrites the page.

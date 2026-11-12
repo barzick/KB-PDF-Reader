@@ -12,9 +12,15 @@ use std::sync::OnceLock;
 use pdfium_render::prelude::*;
 use serde::Serialize;
 
+mod create;
 mod edit;
 mod fonts;
+#[cfg(feature = "ocr")]
+mod ocr;
 mod surgery;
+pub use create::{blank_document, images_to_pdf, PageFormat};
+#[cfg(feature = "ocr")]
+pub use ocr::{make_searchable, ocr_languages, ocr_page, page_needs_ocr, scanned_pages, OcrPage, OcrSummary, OcrWord};
 pub use edit::{replace_block, text_blocks, EditMode, EditResult, RunStyle, StandardFamily, TextBlock, WriteFont};
 pub use fonts::{normalize_font_name, weight_from_name, FontResolver, FontSource, FontUsage, Resolution};
 

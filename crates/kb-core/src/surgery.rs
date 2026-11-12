@@ -189,7 +189,8 @@ pub fn remove_and_overlay(
     let mut content = Content::decode(&raw).map_err(|e| err(e.to_string()))?;
 
     let shows = text_ops(&content.operations);
-    if shows.len() != expected_text_objects {
+    // (Nothing to remove: no need to check the page structure.)
+    if !text_ordinals.is_empty() && shows.len() != expected_text_objects {
         return Err(err(format!(
             "structure de page inattendue ({} opérateurs texte, {} objets)",
             shows.len(),
