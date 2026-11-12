@@ -46,27 +46,32 @@ fn info_render_merge_assemble_fonts() {
     assert_eq!(f[0].pages, vec![1, 2]);
 }
 
+/// A plain Latin TrueType font present on the machine (Liberation/DejaVu on Linux,
+/// Arial on macOS/Windows).
 fn any_ttf() -> String {
-    for dir in ["/usr/share/fonts", "/System/Library/Fonts", "C:\\Windows\\Fonts"] {
-        if let Some(p) = walk(std::path::Path::new(dir)) {
-            return p;
+    const PREFERRED: [&str; 4] = ["LiberationSans-Regular.ttf", "DejaVuSans.ttf", "Arial.ttf", "arial.ttf"];
+    let mut found = vec![];
+    for dir in ["/usr/share/fonts", "/System/Library/Fonts", "/Library/Fonts", "C:\\Windows\\Fonts"] {
+        walk(std::path::Path::new(dir), &mut found);
+    }
+    for name in PREFERRED {
+        if let Some(p) = found.iter().find(|p| p.ends_with(name)) {
+            return p.clone();
         }
     }
-    panic!("aucune police TrueType trouvée pour le test");
+    panic!("aucune police de test (Liberation Sans, DejaVu Sans ou Arial) trouvée");
 }
 
-fn walk(dir: &std::path::Path) -> Option<String> {
-    for e in std::fs::read_dir(dir).ok()?.flatten() {
+fn walk(dir: &std::path::Path, out: &mut Vec<String>) {
+    let Ok(entries) = std::fs::read_dir(dir) else { return };
+    for e in entries.flatten() {
         let p = e.path();
         if p.is_dir() {
-            if let Some(f) = walk(&p) {
-                return Some(f);
-            }
-        } else if p.extension().is_some_and(|x| x.eq_ignore_ascii_case("ttf")) {
-            return Some(p.display().to_string());
+            walk(&p, out);
+        } else {
+            out.push(p.display().to_string());
         }
     }
-    None
 }
 
 #[test]

@@ -381,6 +381,28 @@ pub fn replace_block(
     drop(page);
     drop(doc);
 
+    // Some font files can't be embedded by PDFium (e.g. certain OpenType/CFF or
+    // variable fonts): fall back to a standard font rather than failing.
+    let font = match font {
+        WriteFont::File(p) => {
+            let mut probe = pdfium.create_new_pdf()?;
+            if probe.fonts_mut().load_true_type_from_file(p, true).is_ok() {
+                WriteFont::File(p)
+            } else {
+                let name = p.to_string_lossy().to_lowercase();
+                let family = if name.contains("mono") || name.contains("cour") {
+                    StandardFamily::Mono
+                } else if name.contains("serif") && !name.contains("sans") || name.contains("times") {
+                    StandardFamily::Serif
+                } else {
+                    StandardFamily::Sans
+                };
+                WriteFont::Standard { bold: name.contains("bold"), italic: name.contains("italic") || name.contains("oblique"), family }
+            }
+        }
+        other => other,
+    };
+
     let measure = Measure {
         face_data: match &font {
             WriteFont::File(p) => std::fs::read(p).ok(),
