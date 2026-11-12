@@ -9,5 +9,7 @@ pdfium-render = "0.9"
 image = { version = "0.25", default-features = false, features = ["png"] }
 thiserror = "2"
 serde = { version = "1", features = ["derive"] }
+fontdb = "0.24"
+ureq = "2"
 
 [dev-dependencies]

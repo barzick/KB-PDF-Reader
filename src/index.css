@@ -141,3 +141,10 @@ input {
   background: var(--text); color: var(--bg); padding: 8px 14px; border-radius: 8px; box-shadow: var(--shadow);
 }
 .busy { bottom: auto; top: 60px; }
+
+.fonts { display: flex; flex-direction: column; min-height: 0; flex: 1; }
+.online-toggle { display: flex; gap: 6px; align-items: center; padding: 8px 12px 0; color: var(--muted); }
+.status { font-size: 12px; margin: 2px 0; }
+.status.ok { color: var(--accent); }
+.status.warn { color: #b45309; }
+.status.bad, .danger-text { color: var(--danger); }

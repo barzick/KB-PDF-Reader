@@ -5,11 +5,11 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 
-use kb_core::{DocInfo, FontUsage, PageRef};
-use parking_lot::RwLock;
+use kb_core::{DocInfo, FontResolver, FontUsage, PageRef, Resolution};
+use parking_lot::{Mutex, RwLock};
 use serde::Serialize;
 use tauri::ipc::Response;
-use tauri::State;
+use tauri::{Manager, State};
 
 pub struct Doc {
   name: String,
@@ -188,4 +188,32 @@ pub fn startup_files() -> Vec<String> {
     .skip(1)
     .filter(|a| a.to_lowercase().ends_with(".pdf") && std::path::Path::new(a).is_file())
     .collect()
+}
+
+/// Font resolver shared by all documents; created on first use.
+#[derive(Default)]
+pub struct Fonts(Arc<Mutex<Option<FontResolver>>>);
+
+/// Finds a complete font for each font of the document:
+/// this computer → free download (cached) → equivalent with same widths.
+#[tauri::command]
+pub async fn resolve_fonts(
+  app: tauri::AppHandle,
+  lib: State<'_, Library>,
+  fonts: State<'_, Fonts>,
+  id: String,
+  online: bool,
+) -> Result<Vec<Resolution>, String> {
+  let bytes = lib.bytes(&id)?;
+  let cache = app.path().app_data_dir().map_err(|e| e.to_string())?.join("fonts");
+  let shared = fonts.0.clone();
+  tauri::async_runtime::spawn_blocking(move || {
+    let usages = kb_core::fonts(&bytes).map_err(|e| e.to_string())?;
+    let mut guard = shared.lock();
+    let resolver = guard.get_or_insert_with(|| FontResolver::new(&cache, online));
+    resolver.set_online(online);
+    Ok(resolver.resolve_all(&usages))
+  })
+  .await
+  .map_err(|e| e.to_string())?
 }

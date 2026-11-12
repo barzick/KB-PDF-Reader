@@ -12,16 +12,15 @@ Application de bureau pour **macOS et Windows** pour lire, assembler et modifier
 - Affichage fidèle par PDFium, miniatures, zoom, ajustement à la largeur
 - Fusionner plusieurs PDF dans l'ordre choisi
 - Pages : réorganiser (glisser les miniatures), pivoter, supprimer, extraire
-- Liste des polices utilisées (intégrées ou non) : base de la future recherche automatique de polices
+- **Recherche automatique des polices** (onglet Polices) : pour chaque police du PDF, l'app cherche une version complète sur l'ordinateur, sinon la télécharge gratuitement (Fontsource / Google Fonts, gardée en cache), sinon utilise un équivalent aux mêmes largeurs (Arimo/Liberation pour Arial et Helvetica, Tinos pour Times, Cousine pour Courier, Carlito pour Calibri, Caladea pour Cambria…). Téléchargement désactivable.
 - Enregistrer / Enregistrer sous
 
 ## Feuille de route
 
-1. Recherche automatique des polices : PDF → ordinateur → téléchargement (Google Fonts, Fontsource) → équivalent métrique (Liberation, Carlito…)
-2. Édition du texte existant (paragraphes, retour à la ligne, police d'origine), des images et des formes
-3. Annotations, surlignage, formulaires, signatures
-4. OCR des documents scannés (Tesseract), avec texte modifiable
-5. Création de PDF (pages vierges, images, documents)
+1. Édition du texte existant (paragraphes, retour à la ligne, police d'origine), des images et des formes
+2. Annotations, surlignage, formulaires, signatures
+3. OCR des documents scannés (Tesseract), avec texte modifiable
+4. Création de PDF (pages vierges, images, documents)
 
 ## Développement
 

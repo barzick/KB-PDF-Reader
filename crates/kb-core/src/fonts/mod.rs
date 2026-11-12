@@ -1,5 +1,8 @@
 use serde::Serialize;
 
+mod resolve;
+pub use resolve::{FontResolver, FontSource, Resolution};
+
 #[derive(Debug, Clone, Serialize)]
 pub struct FontUsage {
     /// Name as stored in the PDF, e.g. "ABCDEF+Arial-BoldMT".
@@ -9,6 +12,8 @@ pub struct FontUsage {
     pub embedded: bool,
     pub bold: bool,
     pub italic: bool,
+    /// CSS-style weight guessed from the name (400 regular, 700 bold…).
+    pub weight: u16,
     /// 1-based page numbers where the font appears.
     pub pages: Vec<u32>,
 }
@@ -49,6 +54,22 @@ pub fn normalize_font_name(raw: &str) -> String {
     out.trim().to_string()
 }
 
+/// Guesses the CSS weight from a PDF font name ("Arial-BoldMT" → 700).
+pub fn weight_from_name(raw: &str) -> u16 {
+    let n = raw.to_lowercase().replace([' ', '_'], "");
+    let table: [(&str, u16); 12] = [
+        ("thin", 100), ("hairline", 100), ("extralight", 200), ("ultralight", 200),
+        ("light", 300), ("medium", 500), ("semibold", 600), ("demibold", 600),
+        ("extrabold", 800), ("ultrabold", 800), ("black", 900), ("heavy", 900),
+    ];
+    for (k, w) in table {
+        if n.contains(k) {
+            return w;
+        }
+    }
+    if n.contains("bold") { 700 } else { 400 }
+}
+
 #[cfg(test)]
 mod tests {
     use super::normalize_font_name as n;
@@ -61,5 +82,14 @@ mod tests {
         assert_eq!(n("Helvetica"), "Helvetica");
         assert_eq!(n("Calibri,Bold"), "Calibri");
         assert_eq!(n("QWERTY+Roboto-Regular"), "Roboto");
+    }
+
+    #[test]
+    fn weights() {
+        use super::weight_from_name as w;
+        assert_eq!(w("Arial-BoldMT"), 700);
+        assert_eq!(w("OpenSans-SemiBold"), 600);
+        assert_eq!(w("Roboto-Light"), 300);
+        assert_eq!(w("Helvetica"), 400);
     }
 }

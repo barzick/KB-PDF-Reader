@@ -13,7 +13,7 @@ use pdfium_render::prelude::*;
 use serde::Serialize;
 
 mod fonts;
-pub use fonts::{normalize_font_name, FontUsage};
+pub use fonts::{normalize_font_name, weight_from_name, FontResolver, FontSource, FontUsage, Resolution};
 
 #[derive(Debug, thiserror::Error)]
 pub enum KbError {
@@ -188,7 +188,8 @@ pub fn fonts(bytes: &[u8]) -> Result<Vec<FontUsage>> {
                 family: normalize_font_name(&raw),
                 raw_name: raw.clone(),
                 embedded: font.is_embedded().unwrap_or(false),
-                bold: font.is_bold_reenforced() || raw.to_lowercase().contains("bold"),
+                bold: font.is_bold_reenforced() || weight_from_name(&raw) >= 600,
+                weight: weight_from_name(&raw).max(if font.is_bold_reenforced() { 700 } else { 0 }),
                 italic: font.is_italic(),
                 pages: Vec::new(),
             });

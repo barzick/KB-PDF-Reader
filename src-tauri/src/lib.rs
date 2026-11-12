@@ -7,6 +7,7 @@ pub fn run() {
   tauri::Builder::default()
     .plugin(tauri_plugin_dialog::init())
     .manage(commands::Library::default())
+    .manage(commands::Fonts::default())
     .setup(|app| {
       if cfg!(debug_assertions) {
         app.handle().plugin(
@@ -35,6 +36,7 @@ pub fn run() {
       commands::save_doc,
       commands::doc_fonts,
       commands::startup_files,
+      commands::resolve_fonts,
     ])
     .run(tauri::generate_context!())
     .expect("error while running KB PDF Reader");

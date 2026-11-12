@@ -23,6 +23,21 @@ export interface FontUsage {
   pages: number[]
 }
 
+export type FontSource =
+  | { kind: 'system'; path: string }
+  | { kind: 'downloaded'; path: string }
+  | { kind: 'substitute'; family: string; path: string; same_metrics: boolean }
+  | { kind: 'missing' }
+
+export interface FontResolution {
+  raw_name: string
+  family: string
+  weight: number
+  italic: boolean
+  embedded: boolean
+  source: FontSource
+}
+
 export interface AssemblePage {
   doc: string
   page: number
@@ -40,6 +55,8 @@ export const api = {
     invoke<DocMeta>('assemble_pages', { pages, name, replace: replace ?? null }),
   saveDoc: (id: string, path: string) => invoke<string>('save_doc', { id, path }),
   startupFiles: () => invoke<string[]>('startup_files'),
+  resolveFonts: (id: string, online: boolean) =>
+    invoke<FontResolution[]>('resolve_fonts', { id, online }),
   docFonts: (id: string) => invoke<FontUsage[]>('doc_fonts', { id }),
 }
 
