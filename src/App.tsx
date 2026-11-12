@@ -22,6 +22,7 @@ import { BookmarksPanel } from './components/BookmarksPanel'
 import { PrintDialog, PrintRoot } from './components/Print'
 import { ConvertDialog, type ConvertKind } from './components/ConvertDialog'
 import { BatchDialog } from './components/BatchDialog'
+import { CompareView } from './components/CompareView'
 import { CompressDialog, CropDialog, PasswordDialog, ProtectDialog, SplitDialog } from './components/DocumentDialogs'
 import { SignatureDialog, fromFile, type PlacedImage } from './components/SignatureDialog'
 import { sliceText } from './lib/pageText'
@@ -47,6 +48,7 @@ export default function App() {
   const [printJob, setPrintJob] = useState<{ pages: { index: number; width: number; height: number }[]; dpi: number } | null>(null)
   const [merging, setMerging] = useState(false)
   const [batchOpen, setBatchOpen] = useState(false)
+  const [comparing, setComparing] = useState(false)
   const [busy, setBusy] = useState<string | null>(null)
   const [toast, setToast] = useState<string | null>(null)
   const [dragOver, setDragOver] = useState(false)
@@ -711,6 +713,7 @@ export default function App() {
             '—',
             { label: 'Fusionner des PDF…', onClick: () => setMerging(true) },
             { label: 'Traitement par lots…', hint: 'plusieurs fichiers', onClick: () => setBatchOpen(true) },
+            { label: 'Comparer deux PDF…', onClick: () => setComparing(true), disabled: !doc },
             { label: 'Compresser…', onClick: () => setDocDialog('compress'), disabled: !doc },
             { label: 'Protéger par mot de passe…', onClick: () => setDocDialog('protect'), disabled: !doc },
             '—',
@@ -1060,6 +1063,17 @@ export default function App() {
         )}
       </main>
 
+      {comparing && doc && (
+        <CompareView
+          docs={docs}
+          initial={doc.id}
+          onOpenFiles={async () => {
+            const paths = await pickPdfPaths()
+            return paths.length ? openPaths(paths, false) : []
+          }}
+          onClose={() => setComparing(false)}
+        />
+      )}
       {batchOpen && (
         <BatchDialog
           initial={docs.map((d) => d.path).filter((p): p is string => !!p)}

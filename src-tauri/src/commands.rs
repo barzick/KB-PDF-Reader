@@ -934,3 +934,16 @@ pub async fn batch_process(app: tauri::AppHandle, paths: Vec<String>, action: Ba
   .await
   .map_err(|e| e.to_string())?
 }
+
+// ---------------------------------------------------------------- compare
+
+/// Text differences between two open documents.
+#[tauri::command]
+pub async fn compare_docs(lib: State<'_, Library>, old: String, new: String) -> Result<kb_core::Comparison, String> {
+  let a = lib.bytes(&old)?;
+  let b = lib.bytes(&new)?;
+  tauri::async_runtime::spawn_blocking(move || kb_core::compare(&a, &b))
+    .await
+    .map_err(|e| e.to_string())?
+    .map_err(|e| e.to_string())
+}

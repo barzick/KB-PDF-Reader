@@ -523,3 +523,27 @@ fn conversions() {
     assert!(sheet.contains(r#"<c r="D9""#) && sheet.contains("<v>2191.5</v>"));
     assert!(zip_part(&xlsx, "xl/workbook.xml").contains("Page 2"));
 }
+
+#[test]
+fn compare_two_versions() {
+    setup();
+    let old = new_text_document(&["Le chat dort sur le tapis.", "Prix : 100 CHF", "Fin du texte."]).unwrap();
+    let new = new_text_document(&["Le chien dort sur le tapis.", "Prix : 120 CHF", "Fin du texte.", "Ligne ajoutée"]).unwrap();
+    let c = compare(&old, &new).unwrap();
+    let summary: Vec<(ChangeKind, &str, &str)> = c.changes.iter().map(|c| (c.kind, c.old_text.as_str(), c.new_text.as_str())).collect();
+    assert_eq!(
+        summary,
+        vec![
+            (ChangeKind::Replaced, "chat", "chien"),
+            (ChangeKind::Replaced, "100", "120"),
+            (ChangeKind::Inserted, "", "Ligne ajoutée"),
+        ]
+    );
+    // Highlights sit on the page, one per line.
+    assert_eq!(c.changes[0].old_marks.len(), 1);
+    assert_eq!(c.changes[2].new_marks.len(), 1);
+    assert!(c.changes[2].old_marks.is_empty());
+    let r = c.changes[0].new_marks[0].rect;
+    assert!(r[2] > r[0] && r[3] > r[1]);
+    assert!(compare(&old, &old).unwrap().changes.is_empty());
+}

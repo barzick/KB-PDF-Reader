@@ -256,6 +256,7 @@ export const api = {
   getBookmarks: (id: string) => invoke<Bookmark[]>('get_bookmarks', { id }),
   setBookmarks: (id: string, list: Bookmark[]) => invoke<DocMeta>('set_bookmarks', { id, list }),
   printView: () => invoke<void>('print_view'),
+  compareDocs: (old: string, next: string) => invoke<Comparison>('compare_docs', { old, new: next }),
   batchProcess: (paths: string[], action: BatchAction, dir: string) =>
     invoke<BatchResult[]>('batch_process', { paths, action, dir }),
   convertDoc: (id: string, target: ConvertTarget, pages: number[], dest: string, ocr: boolean, languages: string[]) =>
@@ -291,6 +292,27 @@ export interface BatchResult {
   file: string
   outputs: string[]
   error: string | null
+}
+
+export interface Mark {
+  page: number
+  rect: [number, number, number, number]
+}
+
+export interface Change {
+  kind: 'inserted' | 'deleted' | 'replaced'
+  old_text: string
+  new_text: string
+  old_marks: Mark[]
+  new_marks: Mark[]
+  old_page: number
+  new_page: number
+}
+
+export interface Comparison {
+  changes: Change[]
+  old_words: number
+  new_words: number
 }
 
 export const IMAGE_EXTENSIONS = ['jpg', 'jpeg', 'png', 'tif', 'tiff', 'webp', 'bmp']

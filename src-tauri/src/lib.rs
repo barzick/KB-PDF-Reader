@@ -64,6 +64,7 @@ pub fn run() {
       commands::split_doc,
       commands::convert_doc,
       commands::batch_process,
+      commands::compare_docs,
       commands::get_bookmarks,
       commands::set_bookmarks,
       commands::print_view,

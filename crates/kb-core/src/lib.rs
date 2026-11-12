@@ -20,6 +20,8 @@ mod security;
 mod optimize;
 mod outline;
 mod convert;
+mod compare;
+pub use compare::{compare, Change, ChangeKind, Comparison, Mark};
 pub use convert::{to_docx, to_images, to_text, to_xlsx, ImageKind};
 pub use outline::{bookmarks, set_bookmarks, Bookmark};
 pub use optimize::{compress, crop, CompressLevel, CompressResult, Crop};
