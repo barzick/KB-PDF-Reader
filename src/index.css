@@ -401,3 +401,32 @@ button.link { background: none; border: 0; padding: 0; color: var(--accent); tex
 .read-bar select { max-width: 220px; min-width: 0; }
 .read-where { min-width: 52px; }
 .read-note { flex-basis: 100%; text-align: center; }
+
+/* AI assistant */
+.assistant { width: 360px; flex-shrink: 0; display: flex; flex-direction: column; background: var(--panel); border-left: 1px solid var(--line); min-height: 0; }
+.as-head { display: flex; align-items: center; gap: 6px; padding: 8px 10px; border-bottom: 1px solid var(--line); min-width: 0; }
+.as-head select { min-width: 0; max-width: 170px; }
+.grow { flex: 1; }
+.as-empty { padding: 16px; display: flex; flex-direction: column; gap: 8px; }
+.as-empty p { margin: 0; }
+.as-list { flex: 1; overflow-y: auto; overflow-x: hidden; padding: 12px; display: flex; flex-direction: column; gap: 10px; min-height: 0; }
+.as-msg { padding: 8px 11px; border-radius: 10px; font-size: 14px; line-height: 1.45; overflow-wrap: anywhere; }
+.as-msg.user { align-self: flex-end; max-width: 85%; background: var(--accent); color: #fff; white-space: pre-wrap; }
+.as-msg.bot { align-self: stretch; background: var(--panel-2); }
+.as-msg p { margin: 0 0 8px; }
+.as-msg p:last-child, .as-msg ul:last-child { margin-bottom: 0; }
+.as-msg ul { margin: 0 0 8px; padding-left: 18px; }
+.as-msg code { font-size: 12px; background: rgba(127,127,127,.15); padding: 0 3px; border-radius: 3px; }
+.page-ref { display: inline; border: 0; padding: 0 4px; margin: 0 1px; border-radius: 4px; background: var(--accent-soft); color: var(--accent); font-size: 12px; cursor: pointer; }
+.as-suggest { display: flex; flex-direction: column; gap: 6px; align-items: stretch; }
+.as-suggest p { margin: 0 0 4px; }
+.as-suggest button { text-align: left; }
+.as-error { color: var(--danger); background: rgba(240,68,56,.08); border-radius: 8px; padding: 8px 10px; overflow-wrap: anywhere; }
+.as-note { padding: 4px 12px; }
+.as-sel { display: flex; align-items: center; gap: 6px; padding: 6px 10px; border-top: 1px solid var(--line); flex-wrap: wrap; }
+.as-sel button { padding: 3px 8px; font-size: 13px; }
+.as-input { display: flex; gap: 6px; padding: 10px; border-top: 1px solid var(--line); align-items: flex-end; }
+.as-input textarea { flex: 1; resize: none; min-width: 0; font: inherit; padding: 6px 8px; border: 1px solid var(--line); border-radius: 8px; background: var(--bg); color: var(--text); max-height: 160px; }
+.ai-profiles { display: flex; gap: 6px; flex-wrap: wrap; }
+.ai-profiles button.on { background: var(--accent-soft); color: var(--accent); border-color: var(--accent); }
+@media (max-width: 1000px) { .assistant { width: 300px; } }

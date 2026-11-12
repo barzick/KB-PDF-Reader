@@ -256,6 +256,16 @@ export const api = {
   getBookmarks: (id: string) => invoke<Bookmark[]>('get_bookmarks', { id }),
   setBookmarks: (id: string, list: Bookmark[]) => invoke<DocMeta>('set_bookmarks', { id, list }),
   printView: () => invoke<void>('print_view'),
+  aiSettings: () => invoke<AiSettings>('ai_settings'),
+  aiSaveProfile: (profile: AiProfile, apiKey: string | null) => invoke<AiSettings>('ai_save_profile', { profile, apiKey }),
+  aiDeleteProfile: (id: string) => invoke<AiSettings>('ai_delete_profile', { id }),
+  aiSetActive: (id: string) => invoke<AiSettings>('ai_set_active', { id }),
+  aiListModels: (id: string) => invoke<string[]>('ai_list_models', { id }),
+  aiChat: (requestId: string, profileId: string | null, system: string, messages: ChatMessage[]) =>
+    invoke<string>('ai_chat', { requestId, profileId, system, messages }),
+  aiCancel: (requestId: string) => invoke<void>('ai_cancel', { requestId }),
+  aiDocContext: (id: string, question: string, current: number, budget: number) =>
+    invoke<DocContext>('ai_doc_context', { id, question, current, budget }),
   compareDocs: (old: string, next: string) => invoke<Comparison>('compare_docs', { old, new: next }),
   batchProcess: (paths: string[], action: BatchAction, dir: string) =>
     invoke<BatchResult[]>('batch_process', { paths, action, dir }),
@@ -313,6 +323,31 @@ export interface Comparison {
   changes: Change[]
   old_words: number
   new_words: number
+}
+
+export interface AiProfile {
+  id: string
+  name: string
+  kind: 'openai' | 'anthropic'
+  endpoint: string
+  model: string
+  context_chars: number
+}
+
+export interface AiSettings {
+  profiles: (AiProfile & { has_key: boolean })[]
+  active: string | null
+}
+
+export interface ChatMessage {
+  role: 'user' | 'assistant'
+  content: string
+}
+
+export interface DocContext {
+  text: string
+  pages: number[]
+  partial: boolean
 }
 
 export const IMAGE_EXTENSIONS = ['jpg', 'jpeg', 'png', 'tif', 'tiff', 'webp', 'bmp']

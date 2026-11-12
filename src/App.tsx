@@ -24,6 +24,9 @@ import { ConvertDialog, type ConvertKind } from './components/ConvertDialog'
 import { BatchDialog } from './components/BatchDialog'
 import { CompareView } from './components/CompareView'
 import { ReadAloud } from './components/ReadAloud'
+import { AssistantPanel } from './components/AssistantPanel'
+import { AiSettingsDialog } from './components/AiSettingsDialog'
+import type { AiSettings } from './lib/api'
 import { CompressDialog, CropDialog, PasswordDialog, ProtectDialog, SplitDialog } from './components/DocumentDialogs'
 import { SignatureDialog, fromFile, type PlacedImage } from './components/SignatureDialog'
 import { sliceText } from './lib/pageText'
@@ -50,6 +53,9 @@ export default function App() {
   const [merging, setMerging] = useState(false)
   const [batchOpen, setBatchOpen] = useState(false)
   const [comparing, setComparing] = useState(false)
+  const [assistantOpen, setAssistantOpen] = useState(false)
+  const [aiSettingsOpen, setAiSettingsOpen] = useState(false)
+  const [aiSettings, setAiSettings] = useState<AiSettings | null>(null)
   const [reading, setReading] = useState<{ page: number; char: number } | null>(null)
   const [readHit, setReadHit] = useState<SearchHit | null>(null)
   const [busy, setBusy] = useState<string | null>(null)
@@ -185,6 +191,10 @@ export default function App() {
       ).then((u) => (unlisten = u)),
     )
     return () => unlisten?.()
+  }, [])
+
+  useEffect(() => {
+    api.aiSettings().then(setAiSettings).catch(() => {})
   }, [])
 
   // Conversion progress.
@@ -781,6 +791,9 @@ export default function App() {
             { label: 'Signer…', onClick: () => setSignOpen(true) },
             { label: 'Lire à voix haute', hint: 'Maj+Ctrl/⌘+L', onClick: startReading },
             '—',
+            { label: 'Assistant IA', onClick: () => setAssistantOpen(true) },
+            { label: "Réglages de l'assistant…", hint: 'votre modèle', onClick: () => setAiSettingsOpen(true) },
+            '—',
             {
               label: 'Ajouter du texte',
               hint: 'cliquez sur la page',
@@ -835,6 +848,7 @@ export default function App() {
         </button>
         <button onClick={() => setSignOpen(true)} disabled={!doc} title="Signer le document">Signer</button>
         <button onClick={() => setSearchOpen(true)} disabled={!doc} title="Rechercher (Ctrl/⌘+F)">Rechercher</button>
+        <button className={assistantOpen ? 'on' : ''} onClick={() => setAssistantOpen((o) => !o)} disabled={!doc} title="Assistant IA">Assistant</button>
         <button onClick={undo} disabled={!doc} title="Annuler (Ctrl/⌘+Z)">↶</button>
         <span className="grow" />
         {doc && (
@@ -1080,6 +1094,20 @@ export default function App() {
               ))}
             </section>
             </div>
+            {assistantOpen && (
+              <AssistantPanel
+                docId={doc.id}
+                docName={doc.name}
+                current={current}
+                pageCount={doc.info.page_count}
+                selection={selection ? sliceText(selection.text, selection.sel.start, selection.sel.end) : ''}
+                settings={aiSettings}
+                onSettings={() => setAiSettingsOpen(true)}
+                onActive={async (id) => setAiSettings(await api.aiSetActive(id))}
+                onGoPage={goTo}
+                onClose={() => setAssistantOpen(false)}
+              />
+            )}
           </>
         ) : (
           <div className="welcome">
@@ -1094,6 +1122,7 @@ export default function App() {
         )}
       </main>
 
+      {aiSettingsOpen && <AiSettingsDialog onClose={() => setAiSettingsOpen(false)} onChange={setAiSettings} />}
       {reading && doc && (
         <ReadAloud
           key={`${doc.id}:${reading.page}:${reading.char}`}

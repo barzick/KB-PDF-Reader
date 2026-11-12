@@ -27,6 +27,7 @@ tauri-plugin-dialog = "2"
 tauri-plugin-opener = "2"
 kb-core = { path = "../crates/kb-core" }
 parking_lot = "0.12"
+ureq = { version = "2", features = ["json"] }
 
 [features]
 # Use the Tesseract installed on the machine (dev containers without GitHub access).

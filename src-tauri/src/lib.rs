@@ -1,3 +1,4 @@
+mod ai;
 mod commands;
 
 use tauri::Manager;
@@ -9,6 +10,7 @@ pub fn run() {
     .plugin(tauri_plugin_opener::init())
     .manage(commands::Library::default())
     .manage(commands::Fonts::default())
+    .manage(ai::AiState::default())
     .setup(|app| {
       if cfg!(debug_assertions) {
         app.handle().plugin(
@@ -65,6 +67,14 @@ pub fn run() {
       commands::convert_doc,
       commands::batch_process,
       commands::compare_docs,
+      ai::ai_settings,
+      ai::ai_save_profile,
+      ai::ai_delete_profile,
+      ai::ai_set_active,
+      ai::ai_list_models,
+      ai::ai_chat,
+      ai::ai_cancel,
+      ai::ai_doc_context,
       commands::get_bookmarks,
       commands::set_bookmarks,
       commands::print_view,

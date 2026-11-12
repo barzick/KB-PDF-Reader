@@ -71,7 +71,7 @@ impl Library {
     Ok(meta)
   }
 
-  fn bytes(&self, id: &str) -> Result<Arc<Vec<u8>>, String> {
+  pub(crate) fn bytes(&self, id: &str) -> Result<Arc<Vec<u8>>, String> {
     self.docs.read().get(id).map(|d| d.bytes.clone()).ok_or_else(|| "document fermé".into())
   }
 }
