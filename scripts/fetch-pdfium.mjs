@@ -6,6 +6,20 @@ import { cpSync, existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } fro
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
+/** fetch with retries: CI runners sometimes time out connecting to GitHub. */
+async function fetchRetry(url, tries = 5) {
+  for (let i = 1; ; i++) {
+    try {
+      const res = await fetch(url)
+      if (res.ok || res.status < 500 || i >= tries) return res
+    } catch (e) {
+      if (i >= tries) throw e
+    }
+    console.log(`Nouvel essai (${i}/${tries - 1})…`)
+    await new Promise((r) => setTimeout(r, 3000 * i))
+  }
+}
+
 const VERSION = 'chromium/8152'
 
 const auto = () => {
@@ -20,7 +34,7 @@ const out = join(import.meta.dirname, '..', 'src-tauri', 'pdfium')
 const tmp = mkdtempSync(join(tmpdir(), 'pdfium-'))
 
 console.log(`PDFium ${VERSION} (${target}) → ${out}`)
-const res = await fetch(url)
+const res = await fetchRetry(url)
 if (!res.ok) throw new Error(`Téléchargement impossible (${res.status}) : ${url}`)
 writeFileSync(join(tmp, 'pdfium.tgz'), Buffer.from(await res.arrayBuffer()))
 execSync(`tar -xzf pdfium.tgz`, { cwd: tmp, stdio: 'inherit' })

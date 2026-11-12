@@ -4,6 +4,20 @@
 import { existsSync, mkdirSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 
+/** fetch with retries: CI runners sometimes time out connecting to GitHub. */
+async function fetchRetry(url, tries = 5) {
+  for (let i = 1; ; i++) {
+    try {
+      const res = await fetch(url)
+      if (res.ok || res.status < 500 || i >= tries) return res
+    } catch (e) {
+      if (i >= tries) throw e
+    }
+    console.log(`Nouvel essai (${i}/${tries - 1})…`)
+    await new Promise((r) => setTimeout(r, 3000 * i))
+  }
+}
+
 const langs = process.argv.length > 2 ? process.argv.slice(2) : ['fra', 'eng', 'deu', 'ita']
 const out = join(import.meta.dirname, '..', 'src-tauri', 'tessdata')
 mkdirSync(out, { recursive: true })
@@ -17,7 +31,7 @@ for (const lang of [...langs, 'osd']) {
   // osd (page orientation) only exists in the regular repository.
   const repo = lang === 'osd' ? 'tessdata' : 'tessdata_best'
   const url = `https://raw.githubusercontent.com/tesseract-ocr/${repo}/main/${lang}.traineddata`
-  const res = await fetch(url)
+  const res = await fetchRetry(url)
   if (!res.ok) throw new Error(`Téléchargement impossible (${res.status}) : ${url}`)
   writeFileSync(file, Buffer.from(await res.arrayBuffer()))
   console.log(`${lang} : OK`)
