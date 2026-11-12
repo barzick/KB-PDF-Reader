@@ -293,7 +293,12 @@ fn build_blocks(lines: Vec<Line>, page_width: f32) -> Vec<TextBlock> {
 pub fn text_blocks(bytes: &[u8], page_index: u32) -> Result<Vec<TextBlock>> {
     let doc = open(bytes)?;
     let page = doc.pages().get(page_index as PdfPageIndex).map_err(|_| KbError::BadPage(page_index + 1))?;
-    Ok(build_blocks(build_lines(fragments(&page)), page.width().value))
+    Ok(page_blocks(&page))
+}
+
+/// Paragraphs of an already open page.
+pub(crate) fn page_blocks(page: &PdfPage) -> Vec<TextBlock> {
+    build_blocks(build_lines(fragments(page)), page.width().value)
 }
 
 /// Font used to write the new text.

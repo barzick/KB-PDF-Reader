@@ -30,7 +30,7 @@ pub fn page_text(bytes: &[u8], page_index: u32) -> Result<PageText> {
     Ok(read(&page))
 }
 
-fn read(page: &PdfPage) -> PageText {
+pub(crate) fn read(page: &PdfPage) -> PageText {
     let mut out = PageText { text: String::new(), boxes: vec![] };
     let Ok(text) = page.text() else { return out };
     for ch in text.chars().iter() {

@@ -181,6 +181,8 @@ button.on { background: var(--accent-soft); color: var(--accent); }
 .small { font-size: 12px; }
 .segmented { display: flex; gap: 4px; background: var(--panel-2); padding: 3px; border-radius: 8px; align-self: flex-start; }
 .segmented button { border: 0; }
+.field-row { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.field-row .field { min-width: 0; }
 .scan-banner {
   display: flex; gap: 12px; align-items: center; justify-content: center; padding: 8px 12px;
   background: var(--accent-soft); color: var(--text); border-bottom: 1px solid var(--line);

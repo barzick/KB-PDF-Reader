@@ -256,6 +256,8 @@ export const api = {
   getBookmarks: (id: string) => invoke<Bookmark[]>('get_bookmarks', { id }),
   setBookmarks: (id: string, list: Bookmark[]) => invoke<DocMeta>('set_bookmarks', { id, list }),
   printView: () => invoke<void>('print_view'),
+  convertDoc: (id: string, target: ConvertTarget, pages: number[], dest: string, ocr: boolean, languages: string[]) =>
+    invoke<string[]>('convert_doc', { id, target, pages, dest, ocr, languages }),
   listFields: (id: string) => invoke<FormField[]>('list_fields', { id }),
   fillFields: (id: string, values: { name: string; value: string }[]) => invoke<DocMeta>('fill_fields', { id, values }),
   flattenDoc: (id: string) => invoke<DocMeta>('flatten_doc', { id }),
@@ -268,6 +270,12 @@ export const api = {
   searchDoc: (id: string, query: string, matchCase: boolean) =>
     invoke<SearchHit[]>('search_doc', { id, query, matchCase }),
 }
+
+export type ConvertTarget =
+  | { kind: 'images'; format: 'png' | 'jpeg'; dpi: number }
+  | { kind: 'text' }
+  | { kind: 'word' }
+  | { kind: 'excel' }
 
 export const IMAGE_EXTENSIONS = ['jpg', 'jpeg', 'png', 'tif', 'tiff', 'webp', 'bmp']
 
@@ -291,6 +299,16 @@ export async function pickFolder(): Promise<string | null> {
   const { open } = await import('@tauri-apps/plugin-dialog')
   const sel = await open({ directory: true })
   return typeof sel === 'string' ? sel : null
+}
+
+export async function pickSaveAs(suggested: string, name: string, extensions: string[]): Promise<string | null> {
+  const { save } = await import('@tauri-apps/plugin-dialog')
+  return save({ defaultPath: suggested, filters: [{ name, extensions }] })
+}
+
+export async function revealFile(path: string): Promise<void> {
+  const { revealItemInDir } = await import('@tauri-apps/plugin-opener')
+  await revealItemInDir(path)
 }
 
 export async function pickSavePath(suggested: string): Promise<string | null> {

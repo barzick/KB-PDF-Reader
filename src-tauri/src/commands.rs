@@ -731,3 +731,96 @@ pub async fn set_bookmarks(lib: State<'_, Library>, id: String, list: Vec<kb_cor
 pub fn print_view(window: tauri::WebviewWindow) -> Result<(), String> {
   window.print().map_err(|e| e.to_string())
 }
+
+// ---------------------------------------------------------------- conversions
+
+#[derive(serde::Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum ConvertTarget {
+  Images { format: kb_core::ImageKind, dpi: u32 },
+  Text,
+  Word,
+  Excel,
+}
+
+#[derive(Serialize, Clone)]
+struct ConvertProgress {
+  id: String,
+  /// "ocr" while recognising scanned pages, then "convert".
+  stage: &'static str,
+  done: usize,
+  total: usize,
+}
+
+/// A path in `dir` named `name.ext`, numbered when the name is taken.
+fn free_path(dir: &std::path::Path, name: &str, ext: &str) -> PathBuf {
+  let mut path = dir.join(format!("{name}.{ext}"));
+  let mut k = 2;
+  while path.exists() {
+    path = dir.join(format!("{name} {k}.{ext}"));
+    k += 1;
+  }
+  path
+}
+
+/// Converts the given pages (0-based) to images (one file per page in the
+/// folder `dest`) or to a text, Word or Excel file (`dest` is the file).
+/// With `ocr`, scanned pages are recognised first so their text is converted too.
+#[tauri::command]
+pub async fn convert_doc(
+  app: tauri::AppHandle,
+  lib: State<'_, Library>,
+  id: String,
+  target: ConvertTarget,
+  pages: Vec<u32>,
+  dest: String,
+  ocr: bool,
+  languages: Vec<String>,
+) -> Result<Vec<String>, String> {
+  use tauri::Emitter;
+  let mut bytes = lib.bytes(&id)?;
+  let base = lib.docs.read().get(&id).map(|d| d.name.trim_end_matches(".pdf").trim_end_matches(".PDF").to_string()).unwrap_or_default();
+  let tessdata = if ocr && !matches!(target, ConvertTarget::Images { .. }) { Some(tessdata_dir(&app)?) } else { None };
+  let emitter = app.clone();
+  tauri::async_runtime::spawn_blocking(move || {
+    let emit = |stage, done, total| {
+      let _ = emitter.emit("convert-progress", ConvertProgress { id: id.clone(), stage, done, total });
+    };
+    if let Some(dir) = tessdata {
+      let langs = if languages.is_empty() { "fra+eng".to_string() } else { languages.join("+") };
+      let (out, _) = kb_core::make_searchable(&bytes, Some(&pages), &dir, &langs, |d, t| emit("ocr", d, t)).map_err(|e| e.to_string())?;
+      bytes = Arc::new(out);
+    }
+    let progress = |d, t| emit("convert", d, t);
+    let dest = PathBuf::from(dest);
+    let written = match target {
+      ConvertTarget::Images { format, dpi } => {
+        std::fs::create_dir_all(&dest).map_err(|e| e.to_string())?;
+        let mut written = vec![];
+        let width = pages.iter().max().map(|m| (m + 1).to_string().len()).unwrap_or(1);
+        kb_core::to_images(&bytes, &pages, dpi, format, |n, p, data| {
+          let path = free_path(&dest, &format!("{base} p{:0width$}", p + 1), format.extension());
+          std::fs::write(&path, data).map_err(|e| kb_core::KbError::Image(e.to_string()))?;
+          written.push(path.display().to_string());
+          progress(n + 1, pages.len());
+          Ok(())
+        })
+        .map_err(|e| e.to_string())?;
+        written
+      }
+      other => {
+        let data = match other {
+          ConvertTarget::Text => kb_core::to_text(&bytes, &pages).map(String::into_bytes),
+          ConvertTarget::Word => kb_core::to_docx(&bytes, &pages, progress),
+          _ => kb_core::to_xlsx(&bytes, &pages, progress),
+        }
+        .map_err(|e| e.to_string())?;
+        std::fs::write(&dest, data).map_err(|e| e.to_string())?;
+        vec![dest.display().to_string()]
+      }
+    };
+    Ok::<_, String>(written)
+  })
+  .await
+  .map_err(|e| e.to_string())?
+}

@@ -478,3 +478,48 @@ fn bookmarks_round_trip() {
     let none = set_bookmarks(&with, &[]).unwrap();
     assert!(bookmarks(&none).unwrap().is_empty());
 }
+
+fn zip_part(data: &[u8], name: &str) -> String {
+    use std::io::Read;
+    let mut z = zip::ZipArchive::new(std::io::Cursor::new(data)).unwrap();
+    let mut s = String::new();
+    z.by_name(name).unwrap().read_to_string(&mut s).unwrap();
+    s
+}
+
+#[test]
+fn conversions() {
+    setup();
+    let pdf = std::fs::read(concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/rapport.pdf")).unwrap();
+    let pages = [0, 1];
+
+    let text = to_text(&pdf, &pages).unwrap();
+    assert!(text.contains("Rapport trimestriel 2026"));
+    assert!(text.contains("Total général"));
+    assert!(text.contains("Deuxième page"));
+
+    let mut sizes = vec![];
+    to_images(&pdf, &pages, 144, ImageKind::Png, |_, p, data| {
+        let img = image::load_from_memory(&data).unwrap();
+        sizes.push((p, img.width()));
+        Ok(())
+    })
+    .unwrap();
+    assert_eq!(sizes, vec![(0, 1191), (1, 1191)]); // 595.3 pt at 144 dpi
+
+    let docx = to_docx(&pdf, &pages, |_, _| {}).unwrap();
+    let doc = zip_part(&docx, "word/document.xml");
+    assert!(doc.contains("Rapport trimestriel 2026"));
+    assert!(doc.contains("<w:tbl>"), "the price table becomes a Word table");
+    assert!(doc.contains("2 191,50"));
+    assert!(doc.contains("<w:b/>") && doc.contains("<w:i/>"));
+    assert_eq!(doc.matches("<w:sectPr>").count(), 2, "one section per page");
+    assert!(zip_part(&docx, "word/_rels/document.xml.rels").contains("media/image1.png"));
+
+    let xlsx = to_xlsx(&pdf, &pages, |_, _| {}).unwrap();
+    let sheet = zip_part(&xlsx, "xl/worksheets/sheet1.xml");
+    // Totals are numbers, in the same column as the other totals.
+    assert!(sheet.contains(r#"<c r="D6" s="#) && sheet.contains("<v>540</v>"));
+    assert!(sheet.contains(r#"<c r="D9""#) && sheet.contains("<v>2191.5</v>"));
+    assert!(zip_part(&xlsx, "xl/workbook.xml").contains("Page 2"));
+}

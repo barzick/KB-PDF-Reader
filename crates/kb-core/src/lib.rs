@@ -19,6 +19,8 @@ mod decorate;
 mod security;
 mod optimize;
 mod outline;
+mod convert;
+pub use convert::{to_docx, to_images, to_text, to_xlsx, ImageKind};
 pub use outline::{bookmarks, set_bookmarks, Bookmark};
 pub use optimize::{compress, crop, CompressLevel, CompressResult, Crop};
 pub use security::{protect, protection, unlock, ProtectOptions, Protection};
@@ -86,7 +88,7 @@ fn pdfium() -> Result<&'static Pdfium> {
     PDFIUM.get().ok_or(KbError::NotInitialized)
 }
 
-fn open(bytes: &[u8]) -> Result<PdfDocument<'_>> {
+pub(crate) fn open(bytes: &[u8]) -> Result<PdfDocument<'_>> {
     Ok(pdfium()?.load_pdf_from_byte_slice(bytes, None)?)
 }
 

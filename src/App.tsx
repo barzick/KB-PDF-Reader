@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { api, IMAGE_EXTENSIONS, pickFolder, pickImagePaths, pickPdfPaths, pickSavePath, type DocMeta, type OcrStatus, type PageFormat } from './lib/api'
+import { api, IMAGE_EXTENSIONS, pickFolder, pickSaveAs, revealFile, type ConvertTarget, pickImagePaths, pickPdfPaths, pickSavePath, type DocMeta, type OcrStatus, type PageFormat } from './lib/api'
 import { PageImage } from './components/PageImage'
 import { MergeDialog } from './components/MergeDialog'
 import { FontsPanel } from './components/FontsPanel'
@@ -20,6 +20,7 @@ import { TextPlaceLayer } from './components/TextPlaceLayer'
 import { HeaderFooterDialog, WatermarkDialog } from './components/DecorateDialog'
 import { BookmarksPanel } from './components/BookmarksPanel'
 import { PrintDialog, PrintRoot } from './components/Print'
+import { ConvertDialog, type ConvertKind } from './components/ConvertDialog'
 import { CompressDialog, CropDialog, PasswordDialog, ProtectDialog, SplitDialog } from './components/DocumentDialogs'
 import { SignatureDialog, fromFile, type PlacedImage } from './components/SignatureDialog'
 import { sliceText } from './lib/pageText'
@@ -41,6 +42,7 @@ export default function App() {
   const [selected, setSelected] = useState<Set<number>>(new Set())
   const [side, setSide] = useState<'pages' | 'bookmarks' | 'fonts'>('pages')
   const [printOpen, setPrintOpen] = useState(false)
+  const [convert, setConvert] = useState<ConvertKind | null>(null)
   const [printJob, setPrintJob] = useState<{ pages: { index: number; width: number; height: number }[]; dpi: number } | null>(null)
   const [merging, setMerging] = useState(false)
   const [busy, setBusy] = useState<string | null>(null)
@@ -174,6 +176,20 @@ export default function App() {
       listen<{ id: string; done: number; total: number }>('ocr-progress', (e) =>
         setBusy(`Reconnaissance du texte… ${Math.min(e.payload.done + 1, e.payload.total)}/${e.payload.total}`),
       ).then((u) => (unlisten = u)),
+    )
+    return () => unlisten?.()
+  }, [])
+
+  // Conversion progress.
+  useEffect(() => {
+    let unlisten: (() => void) | undefined
+    import('@tauri-apps/api/event').then(({ listen }) =>
+      listen<{ stage: 'ocr' | 'convert'; done: number; total: number }>('convert-progress', (e) => {
+        const { stage, done, total } = e.payload
+        const step = Math.min(done + 1, total)
+        if (done >= total && stage === 'convert') return
+        setBusy(stage === 'ocr' ? `Reconnaissance du texte… ${step}/${total}` : `Conversion… page ${step}/${total}`)
+      }).then((u) => (unlisten = u)),
     )
     return () => unlisten?.()
   }, [])
@@ -529,6 +545,25 @@ export default function App() {
     if (files) notify(`${files.length} fichier(s) créé(s) dans ${dir}`)
   }
 
+  const applyConvert = async (target: ConvertTarget, pages: number[], withOcr: boolean) => {
+    if (!doc) return
+    const base = doc.name.replace(/\.pdf$/i, '')
+    const dest =
+      target.kind === 'images'
+        ? await pickFolder()
+        : target.kind === 'word'
+          ? await pickSaveAs(`${base}.docx`, 'Document Word', ['docx'])
+          : target.kind === 'excel'
+            ? await pickSaveAs(`${base}.xlsx`, 'Classeur Excel', ['xlsx'])
+            : await pickSaveAs(`${base}.txt`, 'Texte', ['txt'])
+    if (!dest) return
+    setConvert(null)
+    const files = await run('Conversion…', () => api.convertDoc(doc.id, target, pages, dest, withOcr, []))
+    if (!files?.length) return
+    notify(files.length > 1 ? `${files.length} images créées` : `Converti : ${files[0].split(/[\\/]/).pop()}`)
+    revealFile(files[0]).catch(() => {})
+  }
+
   const saveBookmarks = async (list: Bookmark[]) => {
     if (!doc) return
     const meta = await run('Signets…', () => api.setBookmarks(doc.id, list))
@@ -691,6 +726,18 @@ export default function App() {
             { label: 'Diviser le document…', onClick: () => setDocDialog('split') },
             { label: 'Rogner…', onClick: () => setDocDialog('crop') },
             { label: 'Supprimer', onClick: deletePages, danger: true },
+          ]}
+        />
+        <Menu
+          label="Convertir"
+          disabled={!doc}
+          items={[
+            { label: 'En Word (.docx)…', onClick: () => setConvert('word') },
+            { label: 'En Excel (.xlsx)…', onClick: () => setConvert('excel') },
+            { label: 'En texte (.txt)…', onClick: () => setConvert('text') },
+            { label: 'En images (PNG, JPEG)…', onClick: () => setConvert('images') },
+            '—',
+            { label: 'Images en PDF…', hint: 'nouveau document', onClick: () => setNewOpen(true) },
           ]}
         />
         <Menu
@@ -1069,6 +1116,18 @@ export default function App() {
       )}
       {docDialog === 'split' && doc && (
         <SplitDialog pageCount={doc.info.page_count} onApply={applySplit} onClose={() => setDocDialog(null)} />
+      )}
+      {convert && doc && (
+        <ConvertDialog
+          kind={convert}
+          pageCount={doc.info.page_count}
+          current={current}
+          scanned={ocr?.key.startsWith(`${doc.id}:`) ? ocr.scanned : []}
+          ocrAvailable={!!ocr?.languages.length}
+          onKind={setConvert}
+          onApply={applyConvert}
+          onClose={() => setConvert(null)}
+        />
       )}
       {printOpen && doc && (
         <PrintDialog pageCount={doc.info.page_count} current={current} onPrint={startPrint} onClose={() => setPrintOpen(false)} />

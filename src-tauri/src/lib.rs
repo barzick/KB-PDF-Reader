@@ -62,6 +62,7 @@ pub fn run() {
       commands::compress_doc,
       commands::crop_doc,
       commands::split_doc,
+      commands::convert_doc,
       commands::get_bookmarks,
       commands::set_bookmarks,
       commands::print_view,
