@@ -5,7 +5,7 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 
-use kb_core::{DocInfo, FontResolver, FontUsage, PageRef, Resolution};
+use kb_core::{DocInfo, EditMode, FontResolver, FontSource, FontUsage, PageRef, Resolution, StandardFamily, TextBlock, WriteFont};
 use parking_lot::{Mutex, RwLock};
 use serde::Serialize;
 use tauri::ipc::Response;
@@ -15,7 +15,11 @@ pub struct Doc {
   name: String,
   path: Option<PathBuf>,
   bytes: Arc<Vec<u8>>,
+  /// Previous versions, for undo (most recent last).
+  history: Vec<Arc<Vec<u8>>>,
 }
+
+const MAX_UNDO: usize = 50;
 
 #[derive(Default)]
 pub struct Library {
@@ -34,8 +38,27 @@ impl Library {
       dirty: path.is_none(),
       info,
     };
-    self.docs.write().insert(id, Doc { name, path, bytes: Arc::new(bytes) });
+    self.docs.write().insert(id, Doc { name, path, bytes: Arc::new(bytes), history: vec![] });
     Ok(meta)
+  }
+
+  /// Replaces a document's content, keeping the previous version for undo.
+  fn update(&self, id: &str, bytes: Vec<u8>) -> Result<DocMeta, String> {
+    let info = kb_core::info(&bytes).map_err(|e| e.to_string())?;
+    let mut docs = self.docs.write();
+    let doc = docs.get_mut(id).ok_or("document fermé")?;
+    let old = std::mem::replace(&mut doc.bytes, Arc::new(bytes));
+    doc.history.push(old);
+    if doc.history.len() > MAX_UNDO {
+      doc.history.remove(0);
+    }
+    Ok(DocMeta {
+      id: id.to_string(),
+      name: doc.name.clone(),
+      path: doc.path.as_ref().map(|p| p.display().to_string()),
+      dirty: true,
+      info,
+    })
   }
 
   fn bytes(&self, id: &str) -> Result<Arc<Vec<u8>>, String> {
@@ -147,17 +170,7 @@ pub async fn assemble_pages(
   .map_err(|e| e.to_string())?;
 
   if let Some(id) = replace {
-    let info = kb_core::info(&built).map_err(|e| e.to_string())?;
-    let mut docs = lib.docs.write();
-    let doc = docs.get_mut(&id).ok_or("document fermé")?;
-    doc.bytes = Arc::new(built);
-    return Ok(DocMeta {
-      id,
-      name: doc.name.clone(),
-      path: doc.path.as_ref().map(|p| p.display().to_string()),
-      dirty: true,
-      info,
-    });
+    return lib.update(&id, built);
   }
   lib.insert(name, None, built)
 }
@@ -216,4 +229,104 @@ pub async fn resolve_fonts(
   })
   .await
   .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+pub async fn undo(lib: State<'_, Library>, id: String) -> Result<Option<DocMeta>, String> {
+  let mut docs = lib.docs.write();
+  let doc = docs.get_mut(&id).ok_or("document fermé")?;
+  let Some(prev) = doc.history.pop() else { return Ok(None) };
+  doc.bytes = prev;
+  let info = kb_core::info(&doc.bytes).map_err(|e| e.to_string())?;
+  Ok(Some(DocMeta {
+    id,
+    name: doc.name.clone(),
+    path: doc.path.as_ref().map(|p| p.display().to_string()),
+    dirty: true,
+    info,
+  }))
+}
+
+/// Paragraphs of a page, for the text editing mode.
+#[tauri::command]
+pub async fn page_blocks(lib: State<'_, Library>, id: String, page: u32) -> Result<Vec<TextBlock>, String> {
+  let bytes = lib.bytes(&id)?;
+  tauri::async_runtime::spawn_blocking(move || kb_core::text_blocks(&bytes, page))
+    .await
+    .map_err(|e| e.to_string())?
+    .map_err(|e| e.to_string())
+}
+
+#[derive(Serialize)]
+pub struct EditOutcome {
+  doc: DocMeta,
+  /// The rest of the page was kept exactly as it was.
+  lossless: bool,
+  extra_lines: i32,
+  /// Font actually used to write, e.g. "Arial" or "Arimo (remplace Arial)".
+  font: String,
+}
+
+/// Rewrites one paragraph. The font is found by the resolver (computer →
+/// download → equivalent); the 14 standard PDF fonts are the last resort.
+#[tauri::command]
+pub async fn edit_block(
+  app: tauri::AppHandle,
+  lib: State<'_, Library>,
+  fonts: State<'_, Fonts>,
+  id: String,
+  page: u32,
+  block: TextBlock,
+  text: String,
+  mode: EditMode,
+  online: bool,
+) -> Result<EditOutcome, String> {
+  let bytes = lib.bytes(&id)?;
+  let cache = app.path().app_data_dir().map_err(|e| e.to_string())?.join("fonts");
+  let shared = fonts.0.clone();
+  let (result, font_label) = tauri::async_runtime::spawn_blocking(move || {
+    let usage = kb_core::fonts(&bytes)
+      .ok()
+      .and_then(|all| all.into_iter().find(|f| f.raw_name == block.font))
+      .unwrap_or_else(|| FontUsage {
+        family: kb_core::normalize_font_name(&block.font),
+        raw_name: block.font.clone(),
+        embedded: false,
+        bold: kb_core::weight_from_name(&block.font) >= 600,
+        italic: block.font.to_lowercase().contains("italic"),
+        weight: kb_core::weight_from_name(&block.font),
+        pages: vec![page + 1],
+      });
+    let resolution = {
+      let mut guard = shared.lock();
+      let resolver = guard.get_or_insert_with(|| FontResolver::new(&cache, online));
+      resolver.set_online(online);
+      resolver.resolve(&usage)
+    };
+    let (path, label) = match &resolution.source {
+      FontSource::System { path } | FontSource::Downloaded { path } => (Some(path.clone()), resolution.family.clone()),
+      FontSource::Substitute { family, path, .. } => (Some(path.clone()), format!("{family} (remplace {})", resolution.family)),
+      FontSource::Missing => (None, format!("police standard (remplace {})", resolution.family)),
+    };
+    let lower = resolution.family.to_lowercase();
+    let family = if lower.contains("mono") || lower.contains("courier") {
+      StandardFamily::Mono
+    } else if lower.contains("times") || lower.contains("serif") && !lower.contains("sans") {
+      StandardFamily::Serif
+    } else {
+      StandardFamily::Sans
+    };
+    let font = match &path {
+      Some(p) => WriteFont::File(std::path::Path::new(p)),
+      None => WriteFont::Standard { bold: resolution.weight >= 600, italic: resolution.italic, family },
+    };
+    kb_core::replace_block(&bytes, page, &block, &text, font, mode)
+      .map(|r| (r, label))
+      .map_err(|e| e.to_string())
+  })
+  .await
+  .map_err(|e| e.to_string())??;
+
+  let doc = lib.update(&id, result.bytes)?;
+  Ok(EditOutcome { doc, lossless: result.lossless, extra_lines: result.extra_lines, font: font_label })
 }

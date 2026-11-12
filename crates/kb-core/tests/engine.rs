@@ -104,3 +104,27 @@ fn shift_below_moves_following_text() {
     assert!(r.extra_lines > 0);
     assert!(!r.lossless);
 }
+
+#[test]
+fn edit_page_with_several_content_streams() {
+    use pdfium_render::prelude::*;
+    setup();
+    // PDFium writes one content stream per added object, referenced through an array.
+    let pdfium = Pdfium::default();
+    let mut doc = pdfium.create_new_pdf().unwrap();
+    let font = doc.fonts_mut().load_true_type_from_file(&any_ttf(), true).unwrap();
+    let mut page = doc.pages_mut().create_page_at_end(PdfPagePaperSize::a4()).unwrap();
+    for (i, line) in ["Titre", "Ligne un du paragraphe qui est assez longue pour aller", "jusqu'à la marge."].iter().enumerate() {
+        let y = if i == 0 { 760.0 } else { 720.0 - 14.0 * (i as f32 - 1.0) };
+        page.objects_mut().create_text_object(PdfPoints::new(72.0), PdfPoints::new(y), *line, font, PdfPoints::new(11.0)).unwrap();
+    }
+    drop(page);
+    let bytes = doc.save_to_bytes().unwrap();
+    let blocks = text_blocks(&bytes, 0).unwrap();
+    assert_eq!(blocks.len(), 2);
+
+    let r = replace_block(&bytes, 0, &blocks[1], "Texte remplacé.", WriteFont::File(any_ttf().as_ref()), EditMode::Exact).unwrap();
+    assert!(r.lossless);
+    let texts: Vec<String> = text_blocks(&r.bytes, 0).unwrap().into_iter().map(|b| b.text).collect();
+    assert_eq!(texts, vec!["Titre".to_string(), "Texte remplacé.".to_string()]);
+}

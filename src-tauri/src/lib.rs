@@ -37,6 +37,9 @@ pub fn run() {
       commands::doc_fonts,
       commands::startup_files,
       commands::resolve_fonts,
+      commands::undo,
+      commands::page_blocks,
+      commands::edit_block,
     ])
     .run(tauri::generate_context!())
     .expect("error while running KB PDF Reader");

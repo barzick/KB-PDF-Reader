@@ -148,3 +148,28 @@ input {
 .status.ok { color: var(--accent); }
 .status.warn { color: #b45309; }
 .status.bad, .danger-text { color: var(--danger); }
+
+/* Text editing mode */
+.page-wrap { position: relative; }
+.edit-layer { position: absolute; inset: 0; }
+.text-block {
+  position: absolute; padding: 0; border: 1px dashed transparent; border-radius: 3px;
+  background: transparent; cursor: text;
+}
+.editing .text-block { border-color: rgb(15 118 110 / 0.25); }
+.text-block:hover { border-color: var(--accent) !important; background: rgb(15 118 110 / 0.06) !important; }
+.block-editor {
+  position: absolute; z-index: 5; background: white; border: 2px solid var(--accent);
+  border-radius: 4px; box-shadow: var(--shadow);
+}
+.block-editor textarea {
+  display: block; width: 100%; border: 0; outline: 0; resize: none; padding: 2px;
+  font-family: Arial, Helvetica, sans-serif; background: white; overflow: hidden; border-radius: 0;
+}
+.block-editor-bar {
+  display: flex; gap: 6px; align-items: center; padding: 4px 6px; background: var(--panel);
+  border-top: 1px solid var(--line); color: var(--text); font-size: 13px;
+}
+.block-editor-bar label { display: flex; gap: 4px; align-items: center; }
+button.on { background: var(--accent-soft); color: var(--accent); }
+.page-box { position: relative; flex-shrink: 0; }

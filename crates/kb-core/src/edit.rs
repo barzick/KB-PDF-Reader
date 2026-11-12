@@ -30,7 +30,7 @@ struct Fragment {
     color: [u8; 4],
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, serde::Deserialize)]
 pub struct TextBlock {
     /// Indexes of the page objects that make up this paragraph.
     pub objects: Vec<usize>,
@@ -149,7 +149,9 @@ fn build_lines(mut frags: Vec<Fragment>) -> Vec<Line> {
     lines
 }
 
-fn build_blocks(lines: Vec<Line>) -> Vec<TextBlock> {
+fn build_blocks(lines: Vec<Line>, page_width: f32) -> Vec<TextBlock> {
+    // Right margin assumed symmetric to the page's left margin.
+    let right_margin = page_width - lines.iter().map(|l| l.left).fold(page_width / 2.0, f32::min);
     struct Para {
         lines: Vec<Line>,
         font: String,
@@ -183,13 +185,22 @@ fn build_blocks(lines: Vec<Line>) -> Vec<TextBlock> {
         .map(|p| {
             let all = || p.lines.iter().flat_map(|l| l.frags.iter());
             let (_, _, color) = dominant(all());
+            // A line ending well before the right margin, when the next word would
+            // have fitted, was a deliberate line break (addresses, lists…).
+            let margin = right_margin.max(p.lines.iter().map(|l| l.right).fold(0.0, f32::max));
             let mut text = String::new();
-            for l in &p.lines {
-                let t = l.text.trim();
-                if !text.is_empty() && !text.ends_with('-') {
-                    text.push(' ');
+            for (k, l) in p.lines.iter().enumerate() {
+                if k > 0 {
+                    let prev = &p.lines[k - 1];
+                    let next_word = l.text.split_whitespace().next().unwrap_or("");
+                    let needed = (next_word.chars().count() as f32 + 1.0) * 0.5 * p.size;
+                    if prev.right + needed < margin - 0.5 * p.size {
+                        text.push('\n');
+                    } else if !text.ends_with('-') {
+                        text.push(' ');
+                    }
                 }
-                text.push_str(t);
+                text.push_str(l.text.trim());
             }
             let first = &p.lines[0];
             let mut objects: Vec<usize> = all().map(|f| f.index).collect();
@@ -220,7 +231,7 @@ fn build_blocks(lines: Vec<Line>) -> Vec<TextBlock> {
 pub fn text_blocks(bytes: &[u8], page_index: u32) -> Result<Vec<TextBlock>> {
     let doc = open(bytes)?;
     let page = doc.pages().get(page_index as PdfPageIndex).map_err(|_| KbError::BadPage(page_index + 1))?;
-    Ok(build_blocks(build_lines(fragments(&page))))
+    Ok(build_blocks(build_lines(fragments(&page)), page.width().value))
 }
 
 /// Font used to write the new text.
@@ -363,7 +374,7 @@ pub fn replace_block(
     let text_count = page.objects().iter().filter(|o| o.as_text_object().is_some()).count();
 
     // Check the objects still match what the user saw.
-    let current = build_blocks(build_lines(fragments(&page)));
+    let current = build_blocks(build_lines(fragments(&page)), page.width().value);
     if !current.iter().any(|b| b.objects == block.objects) {
         return Err(KbError::Pdf("le paragraphe a changé, rechargez la page".into()));
     }

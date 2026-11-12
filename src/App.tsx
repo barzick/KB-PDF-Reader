@@ -3,6 +3,8 @@ import { api, pickPdfPaths, pickSavePath, type DocMeta } from './lib/api'
 import { PageImage } from './components/PageImage'
 import { MergeDialog } from './components/MergeDialog'
 import { FontsPanel } from './components/FontsPanel'
+import { EditLayer } from './components/EditLayer'
+import type { EditMode, TextBlock } from './lib/api'
 
 interface OpenDoc extends DocMeta {
   /** Bumped whenever the document content changes, to refresh page images. */
@@ -24,6 +26,7 @@ export default function App() {
   const [busy, setBusy] = useState<string | null>(null)
   const [toast, setToast] = useState<string | null>(null)
   const [dragOver, setDragOver] = useState(false)
+  const [editing, setEditing] = useState(false)
   const viewer = useRef<HTMLDivElement>(null)
   const [viewerWidth, setViewerWidth] = useState(800)
 
@@ -203,6 +206,36 @@ export default function App() {
     setSelected(new Set([to]))
   }
 
+  const fontsOnline = () => {
+    try {
+      return localStorage.getItem('kb.fonts.online') !== 'false'
+    } catch {
+      return true
+    }
+  }
+
+  const editText = async (page: number, block: TextBlock, text: string, mode: EditMode) => {
+    if (!doc) return false
+    const res = await run('Modification du texte…', () =>
+      api.editBlock(doc.id, page, block, text, mode, fontsOnline()),
+    )
+    if (!res) return false
+    replaceDoc(res.doc)
+    const notes = [`Police : ${res.font}`]
+    if (res.extra_lines > 0 && mode === 'exact')
+      notes.push(`le paragraphe a ${res.extra_lines} ligne(s) de plus : cochez « Décaler la suite » s'il chevauche le texte en dessous`)
+    if (!res.lossless && mode === 'exact') notes.push('page réécrite (structure inhabituelle)')
+    notify(notes.join(' · '))
+    return true
+  }
+
+  const undo = async () => {
+    if (!doc) return
+    const meta = await run('Annulation…', () => api.undo(doc.id))
+    if (meta) replaceDoc(meta)
+    else if (meta === null) notify('Rien à annuler.')
+  }
+
   const save = async (as = false) => {
     if (!doc) return
     let path = doc.path
@@ -242,6 +275,8 @@ export default function App() {
       else if (mod && (e.key === '+' || e.key === '=')) (e.preventDefault(), setZoomStep(1))
       else if (mod && e.key === '-') (e.preventDefault(), setZoomStep(-1))
       else if (mod && e.key === '0') (e.preventDefault(), setFitWidth(true))
+      else if (mod && e.key === 'z' && !(e.target instanceof HTMLTextAreaElement || e.target instanceof HTMLInputElement))
+        (e.preventDefault(), undo())
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
@@ -258,6 +293,16 @@ export default function App() {
         <button onClick={() => save(true)} disabled={!doc}>Enregistrer sous…</button>
         <span className="sep" />
         <button onClick={() => setMerging(true)} title="Fusionner plusieurs PDF">Fusionner</button>
+        <span className="sep" />
+        <button
+          className={editing ? 'on' : ''}
+          onClick={() => setEditing((v) => !v)}
+          disabled={!doc}
+          title="Cliquer sur un paragraphe pour le modifier"
+        >
+          Modifier le texte
+        </button>
+        <button onClick={undo} disabled={!doc} title="Annuler (Ctrl/⌘+Z)">↶</button>
         <span className="sep" />
         <button onClick={() => rotate(270)} disabled={!doc} title="Pivoter à gauche">⟲</button>
         <button onClick={() => rotate(90)} disabled={!doc} title="Pivoter à droite">⟳</button>
@@ -342,16 +387,28 @@ export default function App() {
                 <FontsPanel docId={doc.id} version={doc.version} />
               )}
             </aside>
-            <section className="viewer" ref={viewer} onScroll={onScroll}>
+            <section className={`viewer ${editing ? 'editing' : ''}`} ref={viewer} onScroll={onScroll}>
               {doc.info.pages.map((p, i) => (
                 <div key={i} data-page={i} className="page-wrap">
-                  <PageImage
-                    docId={doc.id}
-                    version={doc.version}
-                    page={i}
-                    width={p.width * scale}
-                    height={p.height * scale}
-                  />
+                  <div className="page-box" style={{ width: p.width * scale, height: p.height * scale }}>
+                    <PageImage
+                      docId={doc.id}
+                      version={doc.version}
+                      page={i}
+                      width={p.width * scale}
+                      height={p.height * scale}
+                    />
+                    {editing && Math.abs(i - current) <= 2 && (
+                      <EditLayer
+                        docId={doc.id}
+                        version={doc.version}
+                        page={i}
+                        pageHeight={p.height}
+                        scale={scale}
+                        onEdit={editText}
+                      />
+                    )}
+                  </div>
                 </div>
               ))}
             </section>

@@ -13,11 +13,13 @@ Application de bureau pour **macOS et Windows** pour lire, assembler et modifier
 - Fusionner plusieurs PDF dans l'ordre choisi
 - Pages : réorganiser (glisser les miniatures), pivoter, supprimer, extraire
 - **Recherche automatique des polices** (onglet Polices) : pour chaque police du PDF, l'app cherche une version complète sur l'ordinateur, sinon la télécharge gratuitement (Fontsource / Google Fonts, gardée en cache), sinon utilise un équivalent aux mêmes largeurs (Arimo/Liberation pour Arial et Helvetica, Tinos pour Times, Cousine pour Courier, Carlito pour Calibri, Caladea pour Cambria…). Téléchargement désactivable.
+- **Modifier le texte existant** : bouton « Modifier le texte », clic sur un paragraphe, saisie, Ctrl/⌘+Entrée. Le paragraphe est réécrit dans sa police (trouvée par la recherche automatique), sa taille et sa couleur, avec retour à la ligne automatique. Le reste de la page reste strictement identique (modification chirurgicale du contenu PDF). Option « Décaler la suite » pour déplacer ce qui est en dessous.
+- Annuler (Ctrl/⌘+Z) sur toutes les modifications
 - Enregistrer / Enregistrer sous
 
 ## Feuille de route
 
-1. Édition du texte existant (paragraphes, retour à la ligne, police d'origine), des images et des formes
+1. Édition : styles mixtes dans un paragraphe, texte justifié, images et formes, sous-ensemble des polices intégrées (fichiers plus légers)
 2. Annotations, surlignage, formulaires, signatures
 3. OCR des documents scannés (Tesseract), avec texte modifiable
 4. Création de PDF (pages vierges, images, documents)

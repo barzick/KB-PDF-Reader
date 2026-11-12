@@ -38,6 +38,32 @@ export interface FontResolution {
   source: FontSource
 }
 
+export interface TextBlock {
+  objects: number[]
+  ordinals: number[]
+  text: string
+  lines: number
+  left: number
+  bottom: number
+  right: number
+  top: number
+  x: number
+  y: number
+  size: number
+  line_height: number
+  font: string
+  color: [number, number, number, number]
+}
+
+export type EditMode = 'exact' | 'shift_below'
+
+export interface EditOutcome {
+  doc: DocMeta
+  lossless: boolean
+  extra_lines: number
+  font: string
+}
+
 export interface AssemblePage {
   doc: string
   page: number
@@ -57,6 +83,10 @@ export const api = {
   startupFiles: () => invoke<string[]>('startup_files'),
   resolveFonts: (id: string, online: boolean) =>
     invoke<FontResolution[]>('resolve_fonts', { id, online }),
+  undo: (id: string) => invoke<DocMeta | null>('undo', { id }),
+  pageBlocks: (id: string, page: number) => invoke<TextBlock[]>('page_blocks', { id, page }),
+  editBlock: (id: string, page: number, block: TextBlock, text: string, mode: EditMode, online: boolean) =>
+    invoke<EditOutcome>('edit_block', { id, page, block, text, mode, online }),
   docFonts: (id: string) => invoke<FontUsage[]>('doc_fonts', { id }),
 }
 

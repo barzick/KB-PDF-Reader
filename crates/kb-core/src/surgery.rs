@@ -323,7 +323,17 @@ pub fn remove_and_overlay(
     }
 
     let encoded = Content { operations: ops }.encode().map_err(|e| err(e.to_string()))?;
-    doc.change_page_content(page_id, encoded).map_err(|e| err(e.to_string()))?;
+    // Always write a fresh single stream: /Contents may be a stream, an array,
+    // or a reference to an array, and may be shared with other pages.
+    let mut stream = lopdf::Stream::new(Dictionary::new(), encoded);
+    let _ = stream.compress();
+    let stream_id = doc.add_object(stream);
+    doc.get_dictionary_mut(page_id)
+        .map_err(|e| err(e.to_string()))?
+        .set("Contents", Object::Reference(stream_id));
+    // Drop what is no longer used (old content, old fonts) so removed text
+    // does not linger in the file.
+    doc.prune_objects();
     let mut out = Vec::new();
     doc.save_to(&mut out).map_err(|e| err(e.to_string()))?;
     Ok(out)
