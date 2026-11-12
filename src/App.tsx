@@ -11,11 +11,13 @@ import { AnnotToolbar, MARKUP_TOOLS, type AnnotTool } from './components/AnnotTo
 import { AnnotLayer } from './components/AnnotLayer'
 import { lineRects } from './lib/pageText'
 import { LicenseDialog, licenceAccepted } from './components/LicenseDialog'
-import type { EditMode, FormField, NewAnnot, PageText, Rect, Rgb, SearchHit, TextBlock } from './lib/api'
+import type { EditMode, FormField, HeaderFooter, NewAnnot, PageText, Rect, Rgb, SearchHit, TextBlock, TextStyle, Watermark } from './lib/api'
 import { TextLayer, type Selection } from './components/TextLayer'
 import { SearchBar } from './components/SearchBar'
 import { FormLayer } from './components/FormLayer'
 import { PlaceLayer } from './components/PlaceLayer'
+import { TextPlaceLayer } from './components/TextPlaceLayer'
+import { HeaderFooterDialog, WatermarkDialog } from './components/DecorateDialog'
 import { SignatureDialog, fromFile, type PlacedImage } from './components/SignatureDialog'
 import { sliceText } from './lib/pageText'
 
@@ -62,6 +64,9 @@ export default function App() {
   const [signOpen, setSignOpen] = useState<{ page: number; rect: Rect } | true | null>(null)
   const [placing, setPlacing] = useState<{ image: PlacedImage; width: number; what: string } | null>(null)
   const formNoticed = useRef(new Set<string>())
+  const [addingText, setAddingText] = useState(false)
+  const [textStyle, setTextStyle] = useState<TextStyle>({ family: 'sans', bold: false, italic: false, size: 12, color: [0, 0, 0], opacity: 1 })
+  const [decorate, setDecorate] = useState<'watermark' | 'header' | 'numbers' | null>(null)
   const imageInput = useRef<HTMLInputElement>(null)
   const viewer = useRef<HTMLDivElement>(null)
   const [viewerWidth, setViewerWidth] = useState(800)
@@ -434,6 +439,32 @@ export default function App() {
     notify('Ajouté. Pour le retirer : Annoter → ↖ puis cliquez dessus.')
   }
 
+  const addText = async (page: number, x: number, y: number, text: string) => {
+    if (!doc) return
+    const meta = await run('Ajout du texte…', () => api.addText(doc.id, page, x, y, text, textStyle))
+    if (meta) replaceDoc(meta)
+  }
+
+  const applyWatermark = async (w: Watermark) => {
+    if (!doc) return
+    setDecorate(null)
+    const meta = await run('Filigrane…', () => api.addWatermark(doc.id, w))
+    if (meta) {
+      replaceDoc(meta)
+      notify('Filigrane ajouté. Ctrl/⌘+Z pour annuler.')
+    }
+  }
+
+  const applyHeaderFooter = async (h: HeaderFooter) => {
+    if (!doc) return
+    setDecorate(null)
+    const meta = await run('Mise en page…', () => api.addHeaderFooter(doc.id, h))
+    if (meta) {
+      replaceDoc(meta)
+      notify('Ajouté sur les pages. Ctrl/⌘+Z pour annuler.')
+    }
+  }
+
   // Highlight / underline / strike out the text just selected.
   const markSelection = async () => {
     const s = selectionRef.current
@@ -535,6 +566,7 @@ export default function App() {
       if (mod && e.key === 'c' && !typing && selection) return (e.preventDefault(), copySelection())
       if (e.key === 'Escape' && selection) setSelection(null)
       if (e.key === 'Escape' && placing) setPlacing(null)
+      if (e.key === 'Escape' && addingText && !typing) setAddingText(false)
       if (mod && e.key === 'o') (e.preventDefault(), openDialog())
       else if (mod && e.key === 's') (e.preventDefault(), save(e.shiftKey))
       else if (mod && (e.key === '+' || e.key === '=')) (e.preventDefault(), setZoomStep(1))
@@ -585,7 +617,22 @@ export default function App() {
           items={[
             { label: 'Reconnaître le texte (OCR)…', onClick: () => setOcrOpen(true), disabled: !ocr },
             { label: 'Signer…', onClick: () => setSignOpen(true) },
+            '—',
+            {
+              label: 'Ajouter du texte',
+              hint: 'cliquez sur la page',
+              onClick: () => {
+                setEditing(false)
+                setAnnotating(false)
+                setPlacing(null)
+                setAddingText(true)
+              },
+            },
             { label: 'Ajouter une image…', onClick: () => imageInput.current?.click() },
+            { label: 'Filigrane…', onClick: () => setDecorate('watermark') },
+            { label: 'Numéros de page…', onClick: () => setDecorate('numbers') },
+            { label: 'En-tête et pied de page…', onClick: () => setDecorate('header') },
+            '—',
             {
               label: 'Aplatir formulaire et annotations',
               hint: 'les rend non modifiables',
@@ -603,6 +650,7 @@ export default function App() {
             setEditing((v) => !v)
             setAnnotating(false)
             setPlacing(null)
+            setAddingText(false)
           }}
           disabled={!doc}
           title="Cliquer sur un paragraphe pour le modifier"
@@ -615,6 +663,7 @@ export default function App() {
             setAnnotating((v) => !v)
             setEditing(false)
             setPlacing(null)
+            setAddingText(false)
           }}
           disabled={!doc}
           title="Surligner, commenter, dessiner, tamponner"
@@ -715,6 +764,12 @@ export default function App() {
                 <button className="icon" aria-label="Masquer" onClick={() => setBannerHidden(new Set(bannerHidden).add(doc.id))}>✕</button>
               </div>
             )}
+            {addingText && (
+              <div className="scan-banner">
+                <span>Cliquez sur la page à l'endroit où écrire. Le texte fera partie de la page.</span>
+                <button className="ghost" onClick={() => setAddingText(false)}>Terminer</button>
+              </div>
+            )}
             {placing && (
               <div className="scan-banner">
                 <span>Cliquez sur la page pour placer {placing.what}, ou tracez un cadre. Échap pour annuler.</span>
@@ -805,13 +860,23 @@ export default function App() {
                         }}
                       />
                     )}
-                    {!editing && !annotating && !placing && Math.abs(i - current) <= 2 && fields.some((f) => f.page === i) && (
+                    {!editing && !annotating && !placing && !addingText && Math.abs(i - current) <= 2 && fields.some((f) => f.page === i) && (
                       <FormLayer
                         fields={fields.filter((f) => f.page === i)}
                         pageHeight={p.height}
                         scale={scale}
                         onFill={fillField}
                         onSign={(rect) => setSignOpen({ page: i, rect })}
+                      />
+                    )}
+                    {addingText && Math.abs(i - current) <= 2 && (
+                      <TextPlaceLayer
+                        page={i}
+                        pageHeight={p.height}
+                        scale={scale}
+                        style={textStyle}
+                        onStyle={setTextStyle}
+                        onAdd={addText}
                       />
                     )}
                     {placing && Math.abs(i - current) <= 2 && (
@@ -879,6 +944,18 @@ export default function App() {
           onBlank={createBlank}
           onImages={(format, margin) => fromImages(null, format, margin)}
           onClose={() => setNewOpen(false)}
+        />
+      )}
+      {decorate === 'watermark' && doc && (
+        <WatermarkDialog pageCount={doc.info.page_count} onApply={applyWatermark} onClose={() => setDecorate(null)} />
+      )}
+      {(decorate === 'header' || decorate === 'numbers') && doc && (
+        <HeaderFooterDialog
+          pageCount={doc.info.page_count}
+          fileName={doc.name}
+          numbersOnly={decorate === 'numbers'}
+          onApply={applyHeaderFooter}
+          onClose={() => setDecorate(null)}
         />
       )}
       {signOpen && <SignatureDialog onClose={() => setSignOpen(null)} onPick={pickedSignature} />}

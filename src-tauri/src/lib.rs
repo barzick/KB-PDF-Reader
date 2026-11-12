@@ -53,6 +53,9 @@ pub fn run() {
       commands::list_fields,
       commands::fill_fields,
       commands::flatten_doc,
+      commands::add_text,
+      commands::add_watermark,
+      commands::add_header_footer,
       commands::delete_annot,
       commands::set_note,
     ])

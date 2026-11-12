@@ -542,3 +542,38 @@ pub async fn flatten_doc(lib: State<'_, Library>, id: String) -> Result<DocMeta,
     .map_err(|e| e.to_string())?;
   lib.update(&id, out)
 }
+
+#[tauri::command]
+pub async fn add_text(
+  lib: State<'_, Library>,
+  id: String,
+  page: u32,
+  x: f32,
+  y: f32,
+  text: String,
+  style: kb_core::TextStyle,
+) -> Result<DocMeta, String> {
+  let bytes = lib.bytes(&id)?;
+  let out = kb_core::add_text(&bytes, page, x, y, &text, style).map_err(|e| e.to_string())?;
+  lib.update(&id, out)
+}
+
+#[tauri::command]
+pub async fn add_watermark(lib: State<'_, Library>, id: String, watermark: kb_core::Watermark) -> Result<DocMeta, String> {
+  let bytes = lib.bytes(&id)?;
+  let out = tauri::async_runtime::spawn_blocking(move || kb_core::add_watermark(&bytes, &watermark))
+    .await
+    .map_err(|e| e.to_string())?
+    .map_err(|e| e.to_string())?;
+  lib.update(&id, out)
+}
+
+#[tauri::command]
+pub async fn add_header_footer(lib: State<'_, Library>, id: String, spec: kb_core::HeaderFooter) -> Result<DocMeta, String> {
+  let bytes = lib.bytes(&id)?;
+  let out = tauri::async_runtime::spawn_blocking(move || kb_core::add_header_footer(&bytes, &spec))
+    .await
+    .map_err(|e| e.to_string())?
+    .map_err(|e| e.to_string())?;
+  lib.update(&id, out)
+}

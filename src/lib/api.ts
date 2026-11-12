@@ -110,6 +110,47 @@ export type NewAnnot =
   | { kind: 'stamp'; rect: Rect; label: string; color: Rgb }
   | { kind: 'image'; rect: Rect; data: number[] }
 
+export interface TextStyle {
+  family: 'sans' | 'serif' | 'mono'
+  bold: boolean
+  italic: boolean
+  size: number
+  color: Rgb
+  opacity: number
+}
+
+export interface Watermark {
+  text: string
+  style: TextStyle
+  angle: number
+  pages: number[] | null
+}
+
+export interface HeaderFooter {
+  header: [string, string, string]
+  footer: [string, string, string]
+  style: TextStyle
+  margin: number
+  start: number
+  pages: number[] | null
+  date: string
+  file: string
+}
+
+/** "1-3, 5" → [0, 1, 2, 4] (0-based); null when empty. Throws on bad input. */
+export function parsePages(spec: string, count: number): number[] | null {
+  if (!spec.trim()) return null
+  const out = new Set<number>()
+  for (const part of spec.replace(/\s*-\s*/g, "-").split(/[,;\s]+/).filter(Boolean)) {
+    const m = /^(\d+)(?:-(\d+))?$/.exec(part)
+    if (!m) throw new Error(`Pages : « ${part} » n'est pas compris`)
+    const a = Number(m[1])
+    const b = m[2] ? Number(m[2]) : a
+    for (let i = Math.min(a, b); i <= Math.max(a, b); i++) if (i >= 1 && i <= count) out.add(i - 1)
+  }
+  return [...out].sort((x, y) => x - y)
+}
+
 export type FieldKind = 'text' | 'checkbox' | 'radio' | 'combo' | 'list' | 'button' | 'signature'
 
 export interface FormField {
@@ -169,6 +210,10 @@ export const api = {
   createBlank: (count: number, format: PageFormat, landscape: boolean) =>
     invoke<DocMeta>('create_blank', { count, format, landscape }),
   insertBlank: (id: string, at: number) => invoke<DocMeta>('insert_blank', { id, at }),
+  addText: (id: string, page: number, x: number, y: number, text: string, style: TextStyle) =>
+    invoke<DocMeta>('add_text', { id, page, x, y, text, style }),
+  addWatermark: (id: string, watermark: Watermark) => invoke<DocMeta>('add_watermark', { id, watermark }),
+  addHeaderFooter: (id: string, spec: HeaderFooter) => invoke<DocMeta>('add_header_footer', { id, spec }),
   listFields: (id: string) => invoke<FormField[]>('list_fields', { id }),
   fillFields: (id: string, values: { name: string; value: string }[]) => invoke<DocMeta>('fill_fields', { id, values }),
   flattenDoc: (id: string) => invoke<DocMeta>('flatten_doc', { id }),

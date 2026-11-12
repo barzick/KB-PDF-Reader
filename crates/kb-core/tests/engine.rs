@@ -351,3 +351,50 @@ fn image_stamp_with_transparency() {
     assert!(ink(&pdf, [102.0, 160.0, 140.0, 178.0]) < 0.01);
     assert_eq!(list_annotations(&pdf, 0).unwrap()[0].subtype, "Stamp");
 }
+
+#[test]
+fn text_watermark_and_page_numbers() {
+    setup();
+    let doc = new_text_document(&["Page un", "Page deux", "Page trois"]).unwrap();
+    let style = |size: f32| TextStyle { family: StandardFamily::Sans, bold: false, italic: false, size, color: [0, 0, 0], opacity: 1.0 };
+
+    let with_text = add_text(&doc, 0, 300.0, 500.0, "Ajouté ici\nDeuxième ligne", style(14.0)).unwrap();
+    let t = page_text(&with_text, 0).unwrap().text;
+    assert!(t.contains("Ajouté ici") && t.contains("Deuxième ligne"), "{t}");
+    assert!(page_text(&with_text, 0).unwrap().text.contains("Page un"), "texte d'origine conservé");
+
+    let wm = Watermark {
+        text: "CONFIDENTIEL".into(),
+        style: TextStyle { size: 60.0, color: [200, 0, 0], opacity: 0.3, ..style(60.0) },
+        angle: 45.0,
+        pages: None,
+    };
+    let marked = add_watermark(&doc, &wm).unwrap();
+    for p in 0..3 {
+        assert!(page_text(&marked, p).unwrap().text.contains("CONFIDENTIEL"));
+    }
+    // Light (semi-transparent) red in the middle of the page.
+    let png = render_png(&marked, 0, 595).unwrap();
+    let img = image::load_from_memory(&png).unwrap().to_rgb8();
+    let reddish = img.pixels().filter(|p| p[0] > 200 && p[1] > 120 && p[1] < 220 && p[2] < 220 && p[1] == p[2]).count();
+    assert!(reddish > 500, "filigrane invisible ({reddish})");
+
+    let hf = HeaderFooter {
+        header: ["Rapport".into(), String::new(), "{date}".into()],
+        footer: [String::new(), "Page {page} / {pages}".into(), String::new()],
+        style: style(9.0),
+        margin: 30.0,
+        start: 1,
+        pages: None,
+        date: "12.11.2026".into(),
+        file: String::new(),
+    };
+    let numbered = add_header_footer(&doc, &hf).unwrap();
+    let t = page_text(&numbered, 1).unwrap().text;
+    assert!(t.contains("Page 2 / 3") && t.contains("Rapport") && t.contains("12.11.2026"), "{t}");
+    // The footer sits at the bottom of the page.
+    let hits = search(&numbered, "Page 3 / 3", false).unwrap();
+    assert_eq!(hits.len(), 1);
+    assert_eq!(hits[0].page, 2);
+    assert!(hits[0].rects[0][1] < 45.0, "{:?}", hits[0].rects);
+}

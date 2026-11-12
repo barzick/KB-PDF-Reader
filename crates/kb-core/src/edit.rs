@@ -304,7 +304,8 @@ pub enum WriteFont<'a> {
     Standard { bold: bool, italic: bool, family: StandardFamily },
 }
 
-#[derive(Clone, Copy)]
+#[derive(Debug, Clone, Copy, serde::Deserialize, PartialEq)]
+#[serde(rename_all = "snake_case")]
 pub enum StandardFamily {
     Sans,
     Serif,
@@ -505,7 +506,7 @@ pub struct EditResult {
     pub extra_lines: i32,
 }
 
-fn load_font(doc: &mut PdfDocument, font: &WriteFont) -> Result<PdfFontToken> {
+pub(crate) fn load_font(doc: &mut PdfDocument, font: &WriteFont) -> Result<PdfFontToken> {
     Ok(match font {
         WriteFont::File(p) => doc.fonts_mut().load_true_type_from_file(p, true)?,
         WriteFont::Standard { bold, italic, family } => {

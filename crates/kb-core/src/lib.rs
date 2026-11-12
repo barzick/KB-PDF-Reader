@@ -15,6 +15,8 @@ use serde::Serialize;
 mod annot;
 mod create;
 mod forms;
+mod decorate;
+pub use decorate::{add_header_footer, add_text, add_watermark, Align, HeaderFooter, TextStyle, Watermark};
 pub use forms::{fill_fields, flatten, list_fields, FieldKind, FieldValue, FormField};
 mod std14;
 pub use annot::{add_annotation, delete_annotation, list_annotations, set_note_text, AnnotInfo, NewAnnot};
