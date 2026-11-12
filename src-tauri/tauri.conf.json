@@ -41,9 +41,11 @@
     ],
     "resources": {
       "pdfium/": "pdfium/",
-      "tessdata/": "tessdata/"
+      "tessdata/": "tessdata/",
+      "../LICENSE.md": "LICENSE.md",
+      "../THIRD_PARTY_NOTICES.md": "THIRD_PARTY_NOTICES.md"
     },
-    "copyright": "\u00a9 Kevin",
+    "copyright": "© 2026 Kevin Barzic. Tous droits réservés.",
     "category": "Productivity",
     "shortDescription": "Lire, fusionner et modifier des PDF",
     "fileAssociations": [
@@ -55,6 +57,7 @@
         "mimeType": "application/pdf",
         "role": "Editor"
       }
-    ]
+    ],
+    "licenseFile": "../LICENSE.md"
   }
 }

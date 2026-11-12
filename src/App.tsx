@@ -7,6 +7,7 @@ import { EditLayer } from './components/EditLayer'
 import { OcrDialog } from './components/OcrDialog'
 import { NewDialog } from './components/NewDialog'
 import { Menu } from './components/Menu'
+import { LicenseDialog, licenceAccepted } from './components/LicenseDialog'
 import type { EditMode, PageText, SearchHit, TextBlock } from './lib/api'
 import { TextLayer, type Selection } from './components/TextLayer'
 import { SearchBar } from './components/SearchBar'
@@ -36,6 +37,7 @@ export default function App() {
   const [ocr, setOcr] = useState<(OcrStatus & { key: string }) | null>(null)
   const [ocrOpen, setOcrOpen] = useState(false)
   const [newOpen, setNewOpen] = useState(false)
+  const [licence, setLicence] = useState<'first' | 'about' | null>(() => (licenceAccepted() ? null : 'first'))
   const [bannerHidden, setBannerHidden] = useState<Set<string>>(new Set())
   const [selection, setSelection] = useState<{ sel: Selection; text: PageText } | null>(null)
   const [searchOpen, setSearchOpen] = useState(false)
@@ -457,6 +459,8 @@ export default function App() {
             { label: 'Enregistrer sous…', hint: 'Maj+Ctrl/⌘+S', onClick: () => save(true), disabled: !doc },
             '—',
             { label: 'Fusionner des PDF…', onClick: () => setMerging(true) },
+            '—',
+            { label: 'Licence et à propos…', onClick: () => setLicence('about') },
           ]}
         />
         <Menu
@@ -677,6 +681,9 @@ export default function App() {
           onImages={(format, margin) => fromImages(null, format, margin)}
           onClose={() => setNewOpen(false)}
         />
+      )}
+      {licence && (
+        <LicenseDialog mustAccept={licence === 'first'} onAccept={() => setLicence(null)} onClose={() => setLicence(null)} />
       )}
       {dragOver && <div className="drop-hint">Déposez des PDF pour les ouvrir, ou des images pour en faire un PDF</div>}
       {busy && <div className="busy">{busy}</div>}
