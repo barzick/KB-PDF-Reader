@@ -255,3 +255,43 @@ button.on { background: var(--accent-soft); color: var(--accent); }
 .annot-input textarea { width: 100%; resize: vertical; font: inherit; }
 .annot-input .row { display: flex; gap: 6px; justify-content: flex-end; align-items: center; }
 .annot-input p { margin: 0; white-space: pre-wrap; }
+
+/* Forms */
+.form-layer { position: absolute; inset: 0; pointer-events: none; z-index: 3; }
+.form-layer > * { position: absolute; pointer-events: auto; box-sizing: border-box; margin: 0; }
+.form-field {
+  border: 1px solid rgb(37 99 235 / 0.35); border-radius: 2px; background: rgb(232 240 255 / 0.96);
+  color: #111; font-family: Helvetica, Arial, sans-serif; padding: 0 3px; line-height: 1.15; resize: none;
+}
+textarea.form-field { padding-top: 2px; }
+.form-field:focus { outline: 2px solid var(--accent); background: #fff; }
+.form-toggle { background: rgb(37 99 235 / 0.08); border: 1px dashed rgb(37 99 235 / 0.45); cursor: pointer; padding: 0; }
+.form-toggle.radio { border-radius: 50%; }
+.form-toggle:hover { background: rgb(37 99 235 / 0.18); }
+.form-sign {
+  background: rgb(255 243 205 / 0.92); border: 1px dashed #b7791f; color: #7a4d00; font-size: 12px; cursor: pointer;
+}
+
+/* Placing images and signatures */
+.place-layer { position: absolute; inset: 0; z-index: 6; cursor: crosshair; }
+.place-ghost { position: absolute; opacity: 0.75; pointer-events: none; outline: 1px dashed var(--accent); }
+
+/* Signature dialog */
+@font-face { font-family: 'KB Great Vibes'; src: url('./assets/fonts/GreatVibes-Regular.woff') format('woff'); font-display: swap; }
+@font-face { font-family: 'KB Dancing Script'; src: url('./assets/fonts/DancingScript.woff') format('woff'); font-display: swap; }
+.dialog.sign-dialog { width: min(620px, 94vw); }
+.sign-row { display: flex; gap: 8px; align-items: center; }
+.sign-row .swatch { width: 22px; height: 22px; padding: 0; border-radius: 50%; border: 2px solid var(--panel); box-shadow: 0 0 0 1px var(--line); }
+.sign-row .swatch.on { box-shadow: 0 0 0 2px var(--accent); }
+.sign-pad-wrap { position: relative; }
+.sign-pad { width: 100%; aspect-ratio: 10 / 3; background: #fff; border: 1px solid var(--line); border-radius: 8px; touch-action: none; cursor: crosshair; display: block; }
+.sign-line { position: absolute; left: 6%; right: 6%; bottom: 22%; border-top: 1px solid #c8ccd2; font-size: 11px; color: #9aa0a8; padding-top: 2px; pointer-events: none; }
+.sign-clear { position: absolute; top: 6px; right: 6px; }
+.sign-fonts { display: flex; flex-direction: column; gap: 6px; }
+.sign-fonts button { font-size: 32px; text-align: left; padding: 6px 12px; background: #fff; border: 1px solid var(--line); border-radius: 8px; min-height: 58px; }
+.sign-fonts button.on { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
+.sign-saved { display: flex; flex-wrap: wrap; gap: 8px; }
+.sign-thumb { position: relative; }
+.sign-thumb > button:first-child { width: 140px; height: 56px; background: #fff; border: 1px solid var(--line); border-radius: 8px; padding: 4px; }
+.sign-thumb img { max-width: 100%; max-height: 100%; }
+.sign-thumb .icon { position: absolute; top: -6px; right: -6px; width: 18px; height: 18px; padding: 0; font-size: 10px; border-radius: 50%; background: var(--panel); border: 1px solid var(--line); }

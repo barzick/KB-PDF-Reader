@@ -8,8 +8,8 @@ use serde::{Deserialize, Serialize};
 use crate::std14::{text_width, winansi, wrap};
 use crate::{KbError, Result};
 
-type Rect = [f32; 4]; // left, bottom, right, top
-type Rgb = [u8; 3];
+pub(crate) type Rect = [f32; 4]; // left, bottom, right, top
+pub(crate) type Rgb = [u8; 3];
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
@@ -28,6 +28,11 @@ pub enum NewAnnot {
     /// Freehand drawing: one list of points per stroke.
     Ink { strokes: Vec<Vec<[f32; 2]>>, color: Rgb, width: f32 },
     /// Rubber stamp ("APPROUVÉ", "PAYÉ"…) fitted in `rect`.
+    /// A picture (signature, logo...) kept as an image stamp.
+    Image {
+        rect: Rect,
+        data: Vec<u8>,
+    },
     Stamp { rect: Rect, label: String, color: Rgb },
 }
 
@@ -47,11 +52,11 @@ const MARKUP: &[&str] = &[
     "StrikeOut", "Stamp", "Caret", "Ink", "FileAttachment",
 ];
 
-fn err(e: impl std::fmt::Display) -> KbError {
+pub(crate) fn err(e: impl std::fmt::Display) -> KbError {
     KbError::Pdf(e.to_string())
 }
 
-fn load(bytes: &[u8]) -> Result<Document> {
+pub(crate) fn load(bytes: &[u8]) -> Result<Document> {
     let doc = Document::load_mem(bytes).map_err(err)?;
     if doc.is_encrypted() {
         return Err(err("document protégé par mot de passe"));
@@ -59,18 +64,18 @@ fn load(bytes: &[u8]) -> Result<Document> {
     Ok(doc)
 }
 
-fn save(mut doc: Document) -> Result<Vec<u8>> {
+pub(crate) fn save(mut doc: Document) -> Result<Vec<u8>> {
     let mut out = vec![];
     doc.save_to(&mut out).map_err(err)?;
     Ok(out)
 }
 
-fn page_id(doc: &Document, page_index: u32) -> Result<ObjectId> {
+pub(crate) fn page_id(doc: &Document, page_index: u32) -> Result<ObjectId> {
     doc.get_pages().get(&(page_index + 1)).copied().ok_or(KbError::BadPage(page_index + 1))
 }
 
 /// The page's /Annots array (resolved), with where it lives.
-fn annots(doc: &Document, page: ObjectId) -> Result<Vec<Object>> {
+pub(crate) fn annots(doc: &Document, page: ObjectId) -> Result<Vec<Object>> {
     let dict = doc.get_dictionary(page).map_err(err)?;
     Ok(match dict.get(b"Annots") {
         Ok(Object::Array(a)) => a.clone(),
@@ -79,17 +84,17 @@ fn annots(doc: &Document, page: ObjectId) -> Result<Vec<Object>> {
     })
 }
 
-fn set_annots(doc: &mut Document, page: ObjectId, list: Vec<Object>) -> Result<()> {
+pub(crate) fn set_annots(doc: &mut Document, page: ObjectId, list: Vec<Object>) -> Result<()> {
     let dict = doc.get_object_mut(page).and_then(|o| o.as_dict_mut()).map_err(err)?;
     dict.set("Annots", Object::Array(list));
     Ok(())
 }
 
-fn nums(v: &[f32]) -> Object {
+pub(crate) fn nums(v: &[f32]) -> Object {
     Object::Array(v.iter().map(|&n| Object::Real(n)).collect())
 }
 
-fn rgb(c: Rgb) -> [f32; 3] {
+pub(crate) fn rgb(c: Rgb) -> [f32; 3] {
     [c[0] as f32 / 255.0, c[1] as f32 / 255.0, c[2] as f32 / 255.0]
 }
 
@@ -105,7 +110,7 @@ fn union(rects: &[Rect]) -> Rect {
     bounds(rects.iter().flat_map(|r| [[r[0], r[1]], [r[2], r[3]]]), 0.0)
 }
 
-fn pdf_date() -> String {
+pub(crate) fn pdf_date() -> String {
     let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_secs();
     // Civil date from days since epoch (UTC).
     let days = (now / 86_400) as i64;
@@ -122,7 +127,7 @@ fn pdf_date() -> String {
     format!("D:{y:04}{m:02}{d:02}{:02}{:02}{:02}Z", secs / 3600, secs / 60 % 60, secs % 60)
 }
 
-fn text(s: &str) -> Object {
+pub(crate) fn text(s: &str) -> Object {
     // PDF text strings: UTF-16BE with BOM handles every language.
     let mut v = vec![0xFE, 0xFF];
     for u in s.encode_utf16() {
@@ -131,7 +136,7 @@ fn text(s: &str) -> Object {
     Object::String(v, StringFormat::Hexadecimal)
 }
 
-fn pdf_str(bytes: &[u8]) -> String {
+pub(crate) fn pdf_str(bytes: &[u8]) -> String {
     let mut s = String::from("(");
     for &b in bytes {
         match b {
@@ -177,6 +182,41 @@ fn appearance(doc: &mut Document, bbox: Rect, content: String, opacity: Option<f
         "Resources" => res,
     };
     doc.add_object(Stream::new(dict, content.into_bytes()))
+}
+
+/// Adds an image XObject (JPEG kept as is; others as Flate RGB with an
+/// alpha soft mask). Returns its id and pixel size.
+pub(crate) fn image_xobject(doc: &mut Document, data: &[u8]) -> Result<(ObjectId, u32, u32)> {
+    let img = image::load_from_memory(data).map_err(|e| KbError::Image(e.to_string()))?;
+    let (w, h) = (img.width(), img.height());
+    let mut dict = dictionary! {
+        "Type" => "XObject",
+        "Subtype" => "Image",
+        "Width" => w as i64,
+        "Height" => h as i64,
+        "BitsPerComponent" => 8,
+    };
+    if data.starts_with(&[0xFF, 0xD8, 0xFF]) {
+        dict.set("ColorSpace", if img.color().channel_count() == 1 { "DeviceGray" } else { "DeviceRGB" });
+        dict.set("Filter", "DCTDecode");
+        let id = doc.add_object(Stream::new(dict, data.to_vec()).with_compression(false));
+        return Ok((id, w, h));
+    }
+    let rgba = img.to_rgba8();
+    if rgba.pixels().any(|p| p[3] < 255) {
+        let alpha: Vec<u8> = rgba.pixels().map(|p| p[3]).collect();
+        let mut mask = Stream::new(
+            dictionary! { "Type" => "XObject", "Subtype" => "Image", "Width" => w as i64, "Height" => h as i64, "BitsPerComponent" => 8, "ColorSpace" => "DeviceGray" },
+            alpha,
+        );
+        let _ = mask.compress();
+        dict.set("SMask", doc.add_object(mask));
+    }
+    dict.set("ColorSpace", "DeviceRGB");
+    let rgb: Vec<u8> = rgba.pixels().flat_map(|p| [p[0], p[1], p[2]]).collect();
+    let mut st = Stream::new(dict, rgb);
+    let _ = st.compress();
+    Ok((doc.add_object(st), w, h))
 }
 
 fn circle_path(r: Rect) -> String {
@@ -361,6 +401,21 @@ pub fn add_annotation(bytes: &[u8], page_index: u32, a: &NewAnnot) -> Result<Vec
             let ap = appearance(&mut doc, r, c, None, false, false);
             (r, ap)
         }
+        NewAnnot::Image { rect, data } => {
+            d.set("Subtype", "Stamp");
+            d.set("Name", "KBImage");
+            d.set("Contents", text("Image"));
+            let (img, _, _) = image_xobject(&mut doc, data)?;
+            let (w, h) = (rect[2] - rect[0], rect[3] - rect[1]);
+            let c = format!("q {w} 0 0 {h} {} {} cm /Im0 Do Q", rect[0], rect[1]);
+            let dict = dictionary! {
+                "Type" => "XObject",
+                "Subtype" => "Form",
+                "BBox" => nums(rect),
+                "Resources" => dictionary! { "XObject" => dictionary! { "Im0" => img } },
+            };
+            (*rect, doc.add_object(Stream::new(dict, c.into_bytes())))
+        }
         NewAnnot::Stamp { rect, label, color } => {
             d.set("Subtype", "Stamp");
             d.set("Name", "Draft");
@@ -390,7 +445,7 @@ pub fn add_annotation(bytes: &[u8], page_index: u32, a: &NewAnnot) -> Result<Vec
     save(doc)
 }
 
-fn resolve<'a>(doc: &'a Document, o: &'a Object) -> Option<&'a Dictionary> {
+pub(crate) fn resolve<'a>(doc: &'a Document, o: &'a Object) -> Option<&'a Dictionary> {
     match o {
         Object::Reference(r) => doc.get_dictionary(*r).ok(),
         Object::Dictionary(d) => Some(d),
@@ -398,7 +453,7 @@ fn resolve<'a>(doc: &'a Document, o: &'a Object) -> Option<&'a Dictionary> {
     }
 }
 
-fn decode_text(o: Option<&Object>) -> String {
+pub(crate) fn decode_text(o: Option<&Object>) -> String {
     match o {
         Some(Object::String(b, _)) => {
             if b.starts_with(&[0xFE, 0xFF]) {

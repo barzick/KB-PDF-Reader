@@ -50,6 +50,9 @@ pub fn run() {
       commands::search_doc,
       commands::list_annots,
       commands::add_annot,
+      commands::list_fields,
+      commands::fill_fields,
+      commands::flatten_doc,
       commands::delete_annot,
       commands::set_note,
     ])

@@ -108,6 +108,24 @@ export type NewAnnot =
   | { kind: 'line'; from: [number, number]; to: [number, number]; color: Rgb; width: number; arrow: boolean }
   | { kind: 'ink'; strokes: [number, number][][]; color: Rgb; width: number }
   | { kind: 'stamp'; rect: Rect; label: string; color: Rgb }
+  | { kind: 'image'; rect: Rect; data: number[] }
+
+export type FieldKind = 'text' | 'checkbox' | 'radio' | 'combo' | 'list' | 'button' | 'signature'
+
+export interface FormField {
+  name: string
+  kind: FieldKind
+  page: number
+  rect: Rect
+  value: string
+  export: string
+  checked: boolean
+  options: string[]
+  multiline: boolean
+  readonly: boolean
+  max_len: number | null
+  font_size: number
+}
 
 export interface AnnotInfo {
   index: number
@@ -151,6 +169,9 @@ export const api = {
   createBlank: (count: number, format: PageFormat, landscape: boolean) =>
     invoke<DocMeta>('create_blank', { count, format, landscape }),
   insertBlank: (id: string, at: number) => invoke<DocMeta>('insert_blank', { id, at }),
+  listFields: (id: string) => invoke<FormField[]>('list_fields', { id }),
+  fillFields: (id: string, values: { name: string; value: string }[]) => invoke<DocMeta>('fill_fields', { id, values }),
+  flattenDoc: (id: string) => invoke<DocMeta>('flatten_doc', { id }),
   listAnnots: (id: string, page: number) => invoke<AnnotInfo[]>('list_annots', { id, page }),
   addAnnot: (id: string, page: number, annot: NewAnnot) => invoke<DocMeta>('add_annot', { id, page, annot }),
   deleteAnnot: (id: string, page: number, index: number) => invoke<DocMeta>('delete_annot', { id, page, index }),

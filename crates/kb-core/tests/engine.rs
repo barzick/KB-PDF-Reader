@@ -217,6 +217,21 @@ fn search_and_page_text() {
 }
 
 /// Fraction of non-white pixels of a page area (PDF points), rendered at 1 px/pt.
+/// Share of near-black pixels in a page area.
+fn dark(pdf: &[u8], rect: [f32; 4]) -> f32 {
+    let png = render_png(pdf, 0, 595).unwrap();
+    let img = image::load_from_memory(&png).unwrap().to_luma8();
+    let h = img.height() as f32;
+    let (mut n, mut d) = (0, 0);
+    for y in (h - rect[3]).max(0.0) as u32..(h - rect[1]).min(h) as u32 {
+        for x in rect[0].max(0.0) as u32..(rect[2] as u32).min(img.width()) {
+            n += 1;
+            d += (img.get_pixel(x, y).0[0] < 90) as u32;
+        }
+    }
+    d as f32 / n.max(1) as f32
+}
+
 fn ink(pdf: &[u8], rect: [f32; 4]) -> f32 {
     let png = render_png(pdf, 0, 595).unwrap();
     let img = image::load_from_memory(&png).unwrap().to_rgb8();
@@ -266,4 +281,73 @@ fn annotations_show_list_and_delete() {
     let pdf = delete_annotation(&pdf, 0, list[0].index).unwrap();
     assert_eq!(list_annotations(&pdf, 0).unwrap().len(), all.len() - 1);
     assert!(ink(&pdf, [60.0, 702.0, 190.0, 713.0]) < 0.01, "surlignage supprimé");
+}
+
+#[test]
+fn forms_fill_and_flatten() {
+    setup();
+    let pdf = std::fs::read(concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/form.pdf")).unwrap();
+    let fields = list_fields(&pdf).unwrap();
+    let names: Vec<&str> = fields.iter().map(|f| f.name.as_str()).collect();
+    assert_eq!(names, ["nom", "ville", "remarques", "accepte", "taille", "taille", "taille", "pays"]);
+    assert_eq!(fields[0].kind, FieldKind::Text);
+    assert!(fields[2].multiline);
+    assert_eq!(fields[3].kind, FieldKind::Checkbox);
+    assert_eq!(fields[5].export, "M");
+    assert_eq!(fields[7].kind, FieldKind::Combo);
+    assert_eq!(fields[7].options, ["Suisse", "France", "Sénégal"]);
+
+    let nom = fields[0].rect;
+    let before = dark(&pdf, [nom[0] + 3.0, nom[1] + 3.0, nom[2] - 3.0, nom[3] - 3.0]);
+    let v = |n: &str, x: &str| FieldValue { name: n.into(), value: x.into() };
+    let filled = fill_fields(
+        &pdf,
+        &[
+            v("nom", "Jean Dupont-Ndiaye"),
+            v("ville", "Genève"),
+            v("remarques", "Première ligne\nDeuxième ligne assez longue pour être coupée automatiquement à la bonne largeur"),
+            v("accepte", "true"),
+            v("taille", "M"),
+            v("pays", "Sénégal"),
+        ],
+    )
+    .unwrap();
+    let after = dark(&filled, [nom[0] + 3.0, nom[1] + 3.0, nom[2] - 3.0, nom[3] - 3.0]);
+    assert!(after > before + 0.03, "nom invisible ({before} → {after})");
+
+    let f = list_fields(&filled).unwrap();
+    assert_eq!(f[0].value, "Jean Dupont-Ndiaye");
+    assert_eq!(f[1].value, "Genève");
+    assert!(f[3].checked);
+    assert!(!f[4].checked && f[5].checked && !f[6].checked);
+    assert_eq!(f[7].value, "Sénégal");
+    let chk = f[3].rect;
+    assert!(dark(&filled, chk) > dark(&pdf, chk) + 0.03, "case non cochée à l'écran");
+
+    // Flattening keeps the look but removes the fields.
+    let flat = flatten(&filled).unwrap();
+    assert!(list_fields(&flat).unwrap().is_empty());
+    let a = dark(&flat, [nom[0] + 3.0, nom[1] + 3.0, nom[2] - 3.0, nom[3] - 3.0]);
+    assert!((a - after).abs() < 0.03, "rendu changé à l'aplatissement ({after} → {a})");
+}
+
+#[test]
+fn image_stamp_with_transparency() {
+    setup();
+    let doc = blank_document(1, PageFormat::A4, false).unwrap();
+    // A blue stroke on a transparent background, like a drawn signature.
+    let mut img = image::RgbaImage::new(200, 80);
+    for x in 20..180 {
+        for y in 35..45 {
+            img.put_pixel(x, y, image::Rgba([0, 0, 200, 255]));
+        }
+    }
+    let mut png = vec![];
+    image::DynamicImage::ImageRgba8(img).write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png).unwrap();
+    let rect = [100.0, 100.0, 300.0, 180.0];
+    let pdf = add_annotation(&doc, 0, &NewAnnot::Image { rect, data: png }).unwrap();
+    // Stroke drawn, transparent corners left white.
+    assert!(ink(&pdf, [130.0, 137.0, 270.0, 143.0]) > 0.5);
+    assert!(ink(&pdf, [102.0, 160.0, 140.0, 178.0]) < 0.01);
+    assert_eq!(list_annotations(&pdf, 0).unwrap()[0].subtype, "Stamp");
 }

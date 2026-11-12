@@ -11,9 +11,12 @@ import { AnnotToolbar, MARKUP_TOOLS, type AnnotTool } from './components/AnnotTo
 import { AnnotLayer } from './components/AnnotLayer'
 import { lineRects } from './lib/pageText'
 import { LicenseDialog, licenceAccepted } from './components/LicenseDialog'
-import type { EditMode, NewAnnot, PageText, Rgb, SearchHit, TextBlock } from './lib/api'
+import type { EditMode, FormField, NewAnnot, PageText, Rect, Rgb, SearchHit, TextBlock } from './lib/api'
 import { TextLayer, type Selection } from './components/TextLayer'
 import { SearchBar } from './components/SearchBar'
+import { FormLayer } from './components/FormLayer'
+import { PlaceLayer } from './components/PlaceLayer'
+import { SignatureDialog, fromFile, type PlacedImage } from './components/SignatureDialog'
 import { sliceText } from './lib/pageText'
 
 interface OpenDoc extends DocMeta {
@@ -55,6 +58,11 @@ export default function App() {
   const [hits, setHits] = useState<SearchHit[]>([])
   const [hitIndex, setHitIndex] = useState(0)
   const [searching, setSearching] = useState(false)
+  const [fields, setFields] = useState<FormField[]>([])
+  const [signOpen, setSignOpen] = useState<{ page: number; rect: Rect } | true | null>(null)
+  const [placing, setPlacing] = useState<{ image: PlacedImage; width: number; what: string } | null>(null)
+  const formNoticed = useRef(new Set<string>())
+  const imageInput = useRef<HTMLInputElement>(null)
   const viewer = useRef<HTMLDivElement>(null)
   const [viewerWidth, setViewerWidth] = useState(800)
 
@@ -358,6 +366,74 @@ export default function App() {
     if (meta) replaceDoc(meta)
   }
 
+  // Form fields of the active document.
+  useEffect(() => {
+    if (!doc) return setFields([])
+    let live = true
+    api
+      .listFields(doc.id)
+      .then((f) => {
+        if (!live) return
+        setFields(f)
+        if (f.some((x) => !x.readonly && x.kind !== 'button') && !formNoticed.current.has(doc.id)) {
+          formNoticed.current.add(doc.id)
+          notify('Ce document contient un formulaire : cliquez dans les champs pour le remplir.')
+        }
+      })
+      .catch(() => live && setFields([]))
+    return () => {
+      live = false
+    }
+  }, [doc?.id, doc?.version, notify])
+
+  // Fills run one after another: leaving a text field by clicking a checkbox
+  // fires two changes at once, and each must see the previous result.
+  const fillQueue = useRef<Promise<unknown>>(Promise.resolve())
+  const fillField = (name: string, value: string) => {
+    if (!doc) return
+    const id = doc.id
+    fillQueue.current = fillQueue.current.then(async () => {
+      const meta = await run('Formulaire…', () => api.fillFields(id, [{ name, value }]))
+      if (meta) replaceDoc(meta)
+    })
+  }
+
+  const flattenDoc = async () => {
+    if (!doc) return
+    const meta = await run('Aplatissement…', () => api.flattenDoc(doc.id))
+    if (meta) {
+      replaceDoc(meta)
+      notify('Formulaire et annotations intégrés à la page. Pensez à enregistrer.')
+    }
+  }
+
+  const pickedSignature = (image: PlacedImage) => {
+    const target = signOpen
+    setSignOpen(null)
+    if (target && target !== true) {
+      // Signature field: fit the signature inside it.
+      const [x0, y0, x1, y1] = target.rect
+      const ratio = image.height / image.width
+      const w = Math.min(x1 - x0, (y1 - y0) / ratio)
+      const h = w * ratio
+      const cx = (x0 + x1) / 2
+      const cy = (y0 + y1) / 2
+      addAnnot(target.page, { kind: 'image', rect: [cx - w / 2, cy - h / 2, cx + w / 2, cy + h / 2], data: image.data })
+      return
+    }
+    setEditing(false)
+    setAnnotating(false)
+    setPlacing({ image, width: 150, what: 'la signature' })
+  }
+
+  const placeImage = async (page: number, rect: Rect) => {
+    if (!placing) return
+    const data = placing.image.data
+    setPlacing(null)
+    await addAnnot(page, { kind: 'image', rect, data })
+    notify('Ajouté. Pour le retirer : Annoter → ↖ puis cliquez dessus.')
+  }
+
   // Highlight / underline / strike out the text just selected.
   const markSelection = async () => {
     const s = selectionRef.current
@@ -458,6 +534,7 @@ export default function App() {
       if (e.key === 'F3' && searchOpen) return (e.preventDefault(), stepHit(e.shiftKey ? -1 : 1))
       if (mod && e.key === 'c' && !typing && selection) return (e.preventDefault(), copySelection())
       if (e.key === 'Escape' && selection) setSelection(null)
+      if (e.key === 'Escape' && placing) setPlacing(null)
       if (mod && e.key === 'o') (e.preventDefault(), openDialog())
       else if (mod && e.key === 's') (e.preventDefault(), save(e.shiftKey))
       else if (mod && (e.key === '+' || e.key === '=')) (e.preventDefault(), setZoomStep(1))
@@ -505,7 +582,16 @@ export default function App() {
         <Menu
           label="Outils"
           disabled={!doc}
-          items={[{ label: 'Reconnaître le texte (OCR)…', onClick: () => setOcrOpen(true), disabled: !ocr }]}
+          items={[
+            { label: 'Reconnaître le texte (OCR)…', onClick: () => setOcrOpen(true), disabled: !ocr },
+            { label: 'Signer…', onClick: () => setSignOpen(true) },
+            { label: 'Ajouter une image…', onClick: () => imageInput.current?.click() },
+            {
+              label: 'Aplatir formulaire et annotations',
+              hint: 'les rend non modifiables',
+              onClick: flattenDoc,
+            },
+          ]}
         />
         <span className="sep" />
         <button onClick={openDialog} title="Ouvrir (Ctrl/⌘+O)">Ouvrir</button>
@@ -516,6 +602,7 @@ export default function App() {
           onClick={() => {
             setEditing((v) => !v)
             setAnnotating(false)
+            setPlacing(null)
           }}
           disabled={!doc}
           title="Cliquer sur un paragraphe pour le modifier"
@@ -527,12 +614,14 @@ export default function App() {
           onClick={() => {
             setAnnotating((v) => !v)
             setEditing(false)
+            setPlacing(null)
           }}
           disabled={!doc}
           title="Surligner, commenter, dessiner, tamponner"
         >
           Annoter
         </button>
+        <button onClick={() => setSignOpen(true)} disabled={!doc} title="Signer le document">Signer</button>
         <button onClick={() => setSearchOpen(true)} disabled={!doc} title="Rechercher (Ctrl/⌘+F)">Rechercher</button>
         <button onClick={undo} disabled={!doc} title="Annuler (Ctrl/⌘+Z)">↶</button>
         <span className="grow" />
@@ -626,6 +715,12 @@ export default function App() {
                 <button className="icon" aria-label="Masquer" onClick={() => setBannerHidden(new Set(bannerHidden).add(doc.id))}>✕</button>
               </div>
             )}
+            {placing && (
+              <div className="scan-banner">
+                <span>Cliquez sur la page pour placer {placing.what}, ou tracez un cadre. Échap pour annuler.</span>
+                <button className="ghost" onClick={() => setPlacing(null)}>Annuler</button>
+              </div>
+            )}
             {annotating && (
               <AnnotToolbar
                 tool={tool}
@@ -710,6 +805,25 @@ export default function App() {
                         }}
                       />
                     )}
+                    {!editing && !annotating && !placing && Math.abs(i - current) <= 2 && fields.some((f) => f.page === i) && (
+                      <FormLayer
+                        fields={fields.filter((f) => f.page === i)}
+                        pageHeight={p.height}
+                        scale={scale}
+                        onFill={fillField}
+                        onSign={(rect) => setSignOpen({ page: i, rect })}
+                      />
+                    )}
+                    {placing && Math.abs(i - current) <= 2 && (
+                      <PlaceLayer
+                        image={placing.image}
+                        page={i}
+                        pageHeight={p.height}
+                        scale={scale}
+                        width={placing.width}
+                        onPlace={placeImage}
+                      />
+                    )}
                     {editing && Math.abs(i - current) <= 2 && (
                       <EditLayer
                         docId={doc.id}
@@ -767,6 +881,23 @@ export default function App() {
           onClose={() => setNewOpen(false)}
         />
       )}
+      {signOpen && <SignatureDialog onClose={() => setSignOpen(null)} onPick={pickedSignature} />}
+      <input
+        ref={imageInput}
+        type="file"
+        hidden
+        accept="image/png,image/jpeg,image/webp,image/bmp"
+        onChange={async (e) => {
+          const file = e.target.files?.[0]
+          e.target.value = ''
+          if (!file) return
+          const image = await fromFile(file, false)
+          setEditing(false)
+          setAnnotating(false)
+          // Default: a third of the page width.
+          setPlacing({ image, width: doc ? doc.info.pages[current].width / 3 : 200, what: "l'image" })
+        }}
+      />
       {licence && (
         <LicenseDialog mustAccept={licence === 'first'} onAccept={() => setLicence(null)} onClose={() => setLicence(null)} />
       )}

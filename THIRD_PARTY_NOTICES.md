@@ -12,6 +12,7 @@ KB PDF Reader intègre les composants libres suivants. Ils restent soumis à leu
 | tesseract-rs, pdfium-render, lopdf, fontdb, ttf-parser, similar, serde, ureq, image… | leurs auteurs | MIT ou Apache-2.0 |
 | Tauri, React | leurs auteurs | MIT / Apache-2.0 |
 | Polices téléchargées (Fontsource / Google Fonts) | leurs auteurs | SIL Open Font License 1.1 ou Apache-2.0 |
+| Polices de signature Great Vibes et Dancing Script (intégrées) | The Great Vibes Pro Project Authors ; The Dancing Script Project Authors | SIL Open Font License 1.1 (textes : `src/assets/fonts/`) |
 
 ## Leptonica
 
