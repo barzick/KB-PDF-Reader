@@ -1,0 +1,143 @@
+:root {
+  --bg: #f4f5f7;
+  --panel: #ffffff;
+  --panel-2: #eceef2;
+  --line: #d9dce3;
+  --text: #1d2129;
+  --muted: #6b7280;
+  --accent: #0f766e;
+  --accent-soft: #ccfbf1;
+  --danger: #b42318;
+  --canvas: #e3e6eb;
+  --shadow: 0 1px 3px rgb(0 0 0 / 0.12), 0 4px 16px rgb(0 0 0 / 0.06);
+  font-family: system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+  font-size: 14px;
+  color: var(--text);
+  background: var(--bg);
+  color-scheme: light dark;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #17191d;
+    --panel: #1f2227;
+    --panel-2: #2a2e35;
+    --line: #353a42;
+    --text: #e6e8eb;
+    --muted: #9aa1ac;
+    --accent: #2dd4bf;
+    --accent-soft: #134e4a;
+    --danger: #f97066;
+    --canvas: #0f1114;
+  }
+}
+
+* { box-sizing: border-box; }
+html, body, #root { margin: 0; height: 100%; }
+body { background: var(--bg); overflow: hidden; user-select: none; }
+
+button {
+  font: inherit;
+  color: inherit;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  padding: 5px 10px;
+  cursor: pointer;
+}
+button:hover:not(:disabled) { background: var(--panel-2); }
+button:disabled { opacity: 0.4; cursor: default; }
+button.primary { background: var(--accent); color: white; }
+button.primary:hover:not(:disabled) { background: var(--accent); filter: brightness(1.1); }
+button.ghost { border-color: var(--line); }
+button.danger { color: var(--danger); }
+button.icon { padding: 2px 6px; line-height: 1; }
+input {
+  font: inherit; color: inherit; background: var(--panel);
+  border: 1px solid var(--line); border-radius: 6px; padding: 5px 8px;
+}
+
+.muted { color: var(--muted); }
+.small { font-size: 12px; }
+.pad { padding: 12px; }
+
+.app { display: flex; flex-direction: column; height: 100%; }
+
+.toolbar {
+  display: flex; align-items: center; gap: 2px;
+  padding: 6px 10px; background: var(--panel); border-bottom: 1px solid var(--line);
+}
+.brand { font-weight: 700; letter-spacing: 0.02em; color: var(--accent); margin-right: 12px; }
+.sep { width: 1px; height: 20px; background: var(--line); margin: 0 6px; }
+.grow { flex: 1; }
+.pager { display: flex; align-items: center; gap: 4px; margin-right: 8px; }
+.pager input { width: 48px; text-align: center; padding: 3px; }
+.zoom { min-width: 64px; font-variant-numeric: tabular-nums; }
+
+.tabs {
+  display: flex; gap: 2px; padding: 4px 8px 0; background: var(--panel-2);
+  border-bottom: 1px solid var(--line); overflow-x: auto;
+}
+.tab {
+  display: flex; align-items: center; gap: 6px; max-width: 240px;
+  padding: 5px 6px 5px 12px; border-radius: 8px 8px 0 0; cursor: pointer; color: var(--muted);
+}
+.tab span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tab.active { background: var(--panel); color: var(--text); }
+
+.body { flex: 1; display: flex; min-height: 0; }
+
+.sidebar {
+  width: 180px; flex-shrink: 0; display: flex; flex-direction: column;
+  background: var(--panel); border-right: 1px solid var(--line);
+}
+.side-tabs { display: flex; padding: 6px; gap: 4px; border-bottom: 1px solid var(--line); }
+.side-tabs button { flex: 1; }
+.side-tabs button.on { background: var(--accent-soft); color: var(--accent); }
+.thumbs { flex: 1; overflow-y: auto; padding: 12px 0; display: flex; flex-direction: column; align-items: center; gap: 14px; }
+.thumb { display: flex; flex-direction: column; align-items: center; gap: 4px; cursor: pointer; padding: 4px; border-radius: 6px; border: 2px solid transparent; }
+.thumb.current .page { outline: 2px solid var(--accent); }
+.thumb.selected { background: var(--accent-soft); border-color: var(--accent); }
+.thumb-num { font-size: 12px; color: var(--muted); }
+
+.viewer { flex: 1; overflow: auto; background: var(--canvas); padding: 24px 32px; }
+.page-wrap { display: flex; justify-content: center; margin-bottom: 20px; }
+.page { position: relative; background: white; box-shadow: var(--shadow); flex-shrink: 0; }
+.page img { display: block; width: 100%; height: 100%; }
+.page-error { position: absolute; inset: 0; display: grid; place-items: center; color: #999; font-size: 12px; }
+
+.welcome { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 8px; }
+.welcome h1 { margin: 0; font-size: 28px; }
+.welcome-actions { display: flex; gap: 8px; margin-top: 8px; }
+
+.font-list { list-style: none; margin: 0; padding: 8px; overflow-y: auto; }
+.font-list li { padding: 8px; border-radius: 6px; }
+.font-list li:hover { background: var(--panel-2); }
+.font-family { font-weight: 600; display: flex; gap: 4px; align-items: center; flex-wrap: wrap; }
+.tag { font-size: 10px; font-weight: 500; background: var(--panel-2); border-radius: 4px; padding: 1px 4px; }
+
+.overlay { position: fixed; inset: 0; background: rgb(0 0 0 / 0.35); display: grid; place-items: center; z-index: 10; }
+.dialog {
+  width: min(520px, 92vw); max-height: 85vh; overflow: auto; background: var(--panel);
+  border-radius: 12px; padding: 20px; box-shadow: var(--shadow); display: flex; flex-direction: column; gap: 10px;
+}
+.dialog h2 { margin: 0; font-size: 18px; }
+.dialog p { margin: 0; }
+.merge-list { margin: 0; padding: 0 0 0 22px; display: flex; flex-direction: column; gap: 4px; }
+.merge-list li { padding: 4px 0; }
+.merge-list li > * { vertical-align: middle; }
+.merge-name { display: inline-block; max-width: 280px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; margin-right: 8px; }
+.field { display: flex; flex-direction: column; gap: 4px; }
+.dialog-actions { display: flex; gap: 8px; align-items: center; justify-content: flex-end; }
+.dialog-actions .muted { margin-right: auto; }
+
+.drop-hint {
+  position: fixed; inset: 12px; border: 3px dashed var(--accent); border-radius: 16px;
+  background: rgb(15 118 110 / 0.08); display: grid; place-items: center;
+  font-size: 18px; color: var(--accent); pointer-events: none; z-index: 20;
+}
+.busy, .toast {
+  position: fixed; left: 50%; transform: translateX(-50%); bottom: 20px; z-index: 30;
+  background: var(--text); color: var(--bg); padding: 8px 14px; border-radius: 8px; box-shadow: var(--shadow);
+}
+.busy { bottom: auto; top: 60px; }

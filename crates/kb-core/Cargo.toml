@@ -1,0 +1,13 @@
+[package]
+name = "kb-core"
+version = "0.1.0"
+edition = "2021"
+description = "Moteur PDF de KB PDF Reader (au-dessus de PDFium)"
+
+[dependencies]
+pdfium-render = "0.9"
+image = { version = "0.25", default-features = false, features = ["png"] }
+thiserror = "2"
+serde = { version = "1", features = ["derive"] }
+
+[dev-dependencies]
