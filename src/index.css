@@ -394,3 +394,10 @@ button.link { background: none; border: 0; padding: 0; color: var(--accent); tex
 .cmp-mark.replaced.old, .cmp-mark.replaced.new { background: rgba(247, 184, 1, 0.35); }
 .cmp-mark.sel { outline: 2px solid var(--accent); }
 @media (max-width: 900px) { .cmp-body { grid-template-columns: 200px 1fr 1fr; } }
+
+/* Read aloud */
+.read-bar { position: fixed; left: 50%; bottom: 16px; transform: translateX(-50%); z-index: 30; display: flex; align-items: center; gap: 6px; flex-wrap: wrap; justify-content: center;
+  background: var(--panel); border: 1px solid var(--line); border-radius: 12px; box-shadow: var(--shadow); padding: 6px 10px; max-width: calc(100vw - 32px); }
+.read-bar select { max-width: 220px; min-width: 0; }
+.read-where { min-width: 52px; }
+.read-note { flex-basis: 100%; text-align: center; }

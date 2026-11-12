@@ -23,6 +23,7 @@ import { PrintDialog, PrintRoot } from './components/Print'
 import { ConvertDialog, type ConvertKind } from './components/ConvertDialog'
 import { BatchDialog } from './components/BatchDialog'
 import { CompareView } from './components/CompareView'
+import { ReadAloud } from './components/ReadAloud'
 import { CompressDialog, CropDialog, PasswordDialog, ProtectDialog, SplitDialog } from './components/DocumentDialogs'
 import { SignatureDialog, fromFile, type PlacedImage } from './components/SignatureDialog'
 import { sliceText } from './lib/pageText'
@@ -49,6 +50,8 @@ export default function App() {
   const [merging, setMerging] = useState(false)
   const [batchOpen, setBatchOpen] = useState(false)
   const [comparing, setComparing] = useState(false)
+  const [reading, setReading] = useState<{ page: number; char: number } | null>(null)
+  const [readHit, setReadHit] = useState<SearchHit | null>(null)
   const [busy, setBusy] = useState<string | null>(null)
   const [toast, setToast] = useState<string | null>(null)
   const [dragOver, setDragOver] = useState(false)
@@ -278,6 +281,29 @@ export default function App() {
     const y = r ? (pg.height + pg.y0 - r[3]) * scale : 0
     el.scrollTo({ top: pageEl.offsetTop + y - el.clientHeight / 3 })
   }
+
+  const startReading = () => {
+    if (!doc) return
+    setReading(null)
+    // From the selection when there is one, else from the top of the current page.
+    const from = selection ? { page: selection.sel.page, char: Math.min(selection.sel.start, selection.sel.end) } : { page: current, char: 0 }
+    requestAnimationFrame(() => setReading(from))
+  }
+
+  // Keep the sentence being read in view.
+  useEffect(() => {
+    const el = viewer.current
+    if (!readHit || !el || !doc) return
+    const pageEl = el.querySelector<HTMLElement>(`[data-page="${readHit.page}"]`)
+    const r = readHit.rects[0]
+    const pg = doc.info.pages[readHit.page]
+    if (!pageEl || !pg) return
+    const top = pageEl.offsetTop + (r ? (pg.height + pg.y0 - r[3]) * scale : 0)
+    const bottom = pageEl.offsetTop + (r ? (pg.height + pg.y0 - (readHit.rects[readHit.rects.length - 1] ?? r)[1]) * scale : 0)
+    if (top < el.scrollTop + 40 || bottom > el.scrollTop + el.clientHeight - 80)
+      el.scrollTo({ top: top - el.clientHeight / 3, behavior: 'smooth' })
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [readHit])
 
   const stepHit = (dir: 1 | -1) => {
     if (!hits.length) return
@@ -685,6 +711,7 @@ export default function App() {
       if (mod && e.key === 'o') (e.preventDefault(), openDialog())
       else if (mod && e.key === 's') (e.preventDefault(), save(e.shiftKey))
       else if (mod && e.key === 'p' && doc) (e.preventDefault(), setPrintOpen(true))
+      else if (mod && e.shiftKey && e.key.toLowerCase() === 'l' && doc) (e.preventDefault(), reading ? setReading(null) : startReading())
       else if (mod && (e.key === '+' || e.key === '=')) (e.preventDefault(), setZoomStep(1))
       else if (mod && e.key === '-') (e.preventDefault(), setZoomStep(-1))
       else if (mod && e.key === '0') (e.preventDefault(), setFitWidth(true))
@@ -752,6 +779,7 @@ export default function App() {
           items={[
             { label: 'Reconnaître le texte (OCR)…', onClick: () => setOcrOpen(true), disabled: !ocr },
             { label: 'Signer…', onClick: () => setSignOpen(true) },
+            { label: 'Lire à voix haute', hint: 'Maj+Ctrl/⌘+L', onClick: startReading },
             '—',
             {
               label: 'Ajouter du texte',
@@ -966,14 +994,17 @@ export default function App() {
                       className="page-origin"
                       style={{ left: -p.x0 * scale, width: (p.width + p.x0) * scale, height: (p.height + p.y0) * scale }}
                     >
-                      {!editing && (Math.abs(i - current) <= 2 || hits.some((h) => h.page === i)) && (
+                      {!editing && (Math.abs(i - current) <= 2 || hits.some((h) => h.page === i) || readHit?.page === i) && (
                         <TextLayer
                           docId={doc.id}
                           version={doc.version}
                           page={i}
                           pageHeight={p.height + p.y0}
                           scale={scale}
-                          hits={hits.map((hit, n) => ({ hit, active: n === hitIndex })).filter((h) => h.hit.page === i)}
+                          hits={[
+                            ...hits.map((hit, n) => ({ hit, active: n === hitIndex && !readHit })).filter((h) => h.hit.page === i),
+                            ...(readHit?.page === i ? [{ hit: readHit, active: true }] : []),
+                          ]}
                           selection={selection?.sel ?? null}
                           onSelect={(sel, text) => setSelection(sel && text ? { sel, text } : null)}
                           onCopy={copySelection}
@@ -1063,6 +1094,17 @@ export default function App() {
         )}
       </main>
 
+      {reading && doc && (
+        <ReadAloud
+          key={`${doc.id}:${reading.page}:${reading.char}`}
+          docId={doc.id}
+          version={doc.version}
+          pageCount={doc.info.page_count}
+          start={reading}
+          onSentence={setReadHit}
+          onClose={() => setReading(null)}
+        />
+      )}
       {comparing && doc && (
         <CompareView
           docs={docs}
