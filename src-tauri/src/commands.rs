@@ -347,3 +347,118 @@ pub async fn edit_block(
   let doc = lib.update(&id, result.bytes)?;
   Ok(EditOutcome { doc, lossless: result.lossless, extra_lines: result.extra_lines, font: font_label })
 }
+
+// ---------------------------------------------------------------- OCR
+
+/// The OCR language models ship inside the app ("tessdata" resource folder).
+/// KB_TESSDATA_DIR overrides it (development).
+fn tessdata_dir(app: &tauri::AppHandle) -> Result<PathBuf, String> {
+  std::env::var("KB_TESSDATA_DIR")
+    .map(PathBuf::from)
+    .ok()
+    .or_else(|| app.path().resource_dir().ok().map(|d| d.join("tessdata")))
+    .filter(|d| d.is_dir())
+    .ok_or_else(|| "modèles OCR introuvables".to_string())
+}
+
+#[derive(Serialize)]
+pub struct OcrStatus {
+  /// Installed languages (Tesseract codes: fra, eng, deu, ita…).
+  languages: Vec<String>,
+  /// Pages that look scanned (no text), 1-based.
+  scanned: Vec<u32>,
+}
+
+#[tauri::command]
+pub async fn ocr_status(app: tauri::AppHandle, lib: State<'_, Library>, id: String) -> Result<OcrStatus, String> {
+  let bytes = lib.bytes(&id)?;
+  let languages = tessdata_dir(&app).map(|d| kb_core::ocr_languages(&d)).unwrap_or_default();
+  let scanned = tauri::async_runtime::spawn_blocking(move || kb_core::scanned_pages(&bytes))
+    .await
+    .map_err(|e| e.to_string())?
+    .map_err(|e| e.to_string())?;
+  Ok(OcrStatus { languages, scanned: scanned.into_iter().map(|p| p + 1).collect() })
+}
+
+#[derive(Serialize, Clone)]
+struct OcrProgress {
+  id: String,
+  done: usize,
+  total: usize,
+}
+
+#[derive(Serialize)]
+pub struct OcrOutcome {
+  doc: Option<DocMeta>,
+  summary: kb_core::OcrSummary,
+}
+
+/// Recognises the text of scanned pages (1-based `pages`, all when empty) and
+/// adds it as an invisible, searchable and editable layer.
+#[tauri::command]
+pub async fn ocr_doc(
+  app: tauri::AppHandle,
+  lib: State<'_, Library>,
+  id: String,
+  languages: Vec<String>,
+  pages: Option<Vec<u32>>,
+) -> Result<OcrOutcome, String> {
+  use tauri::Emitter;
+  let bytes = lib.bytes(&id)?;
+  let tessdata = tessdata_dir(&app)?;
+  let langs = if languages.is_empty() { "fra+eng".to_string() } else { languages.join("+") };
+  let emitter = app.clone();
+  let doc_id = id.clone();
+  let (out, summary) = tauri::async_runtime::spawn_blocking(move || {
+    let pages: Option<Vec<u32>> = pages.map(|p| p.into_iter().filter(|&n| n > 0).map(|n| n - 1).collect());
+    kb_core::make_searchable(&bytes, pages.as_deref(), &tessdata, &langs, |done, total| {
+      let _ = emitter.emit("ocr-progress", OcrProgress { id: doc_id.clone(), done, total });
+    })
+  })
+  .await
+  .map_err(|e| e.to_string())?
+  .map_err(|e| e.to_string())?;
+  let doc = if summary.pages.is_empty() { None } else { Some(lib.update(&id, out)?) };
+  Ok(OcrOutcome { doc, summary })
+}
+
+// ---------------------------------------------------------------- creation
+
+#[tauri::command]
+pub async fn create_from_images(
+  lib: State<'_, Library>,
+  paths: Vec<String>,
+  format: kb_core::PageFormat,
+  margin: f32,
+) -> Result<DocMeta, String> {
+  let files = paths.iter().map(std::fs::read).collect::<Result<Vec<_>, _>>().map_err(|e| e.to_string())?;
+  let name = match paths.first() {
+    Some(p) if paths.len() == 1 => {
+      let stem = PathBuf::from(p).file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default();
+      format!("{stem}.pdf")
+    }
+    _ => "Images.pdf".into(),
+  };
+  let pdf = tauri::async_runtime::spawn_blocking(move || {
+    let refs: Vec<&[u8]> = files.iter().map(|f| f.as_slice()).collect();
+    kb_core::images_to_pdf(&refs, format, margin)
+  })
+  .await
+  .map_err(|e| e.to_string())?
+  .map_err(|e| e.to_string())?;
+  lib.insert(name, None, pdf)
+}
+
+#[tauri::command]
+pub async fn create_blank(lib: State<'_, Library>, count: u32, format: kb_core::PageFormat, landscape: bool) -> Result<DocMeta, String> {
+  let pdf = kb_core::blank_document(count, format, landscape).map_err(|e| e.to_string())?;
+  lib.insert("Nouveau document.pdf".into(), None, pdf)
+}
+
+/// Inserts a blank page before page `at` (0-based; the page count appends).
+#[tauri::command]
+pub async fn insert_blank(lib: State<'_, Library>, id: String, at: u32) -> Result<DocMeta, String> {
+  let bytes = lib.bytes(&id)?;
+  let out = kb_core::insert_blank_page(&bytes, at).map_err(|e| e.to_string())?;
+  lib.update(&id, out)
+}

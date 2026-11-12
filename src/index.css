@@ -64,7 +64,7 @@ input {
 .app { display: flex; flex-direction: column; height: 100%; }
 
 .toolbar {
-  display: flex; align-items: center; gap: 2px;
+  display: flex; align-items: center; gap: 2px; overflow-x: auto; scrollbar-width: none;
   padding: 6px 10px; background: var(--panel); border-bottom: 1px solid var(--line);
 }
 .brand { font-weight: 700; letter-spacing: 0.02em; color: var(--accent); margin-right: 12px; }
@@ -173,3 +173,21 @@ input {
 .block-editor-bar label { display: flex; gap: 4px; align-items: center; }
 button.on { background: var(--accent-soft); color: var(--accent); }
 .page-box { position: relative; flex-shrink: 0; }
+
+/* OCR, new document */
+.choices { border: 1px solid var(--line); border-radius: 8px; padding: 8px 12px; display: flex; flex-wrap: wrap; gap: 6px 16px; }
+.choices legend { padding: 0 4px; color: var(--muted); font-size: 12px; }
+.choices label { display: flex; gap: 6px; align-items: center; }
+.small { font-size: 12px; }
+.segmented { display: flex; gap: 4px; background: var(--panel-2); padding: 3px; border-radius: 8px; align-self: flex-start; }
+.segmented button { border: 0; }
+.scan-banner {
+  display: flex; gap: 12px; align-items: center; justify-content: center; padding: 8px 12px;
+  background: var(--accent-soft); color: var(--text); border-bottom: 1px solid var(--line);
+}
+.viewer-col { flex: 1; display: flex; flex-direction: column; min-width: 0; }
+
+.toolbar button { white-space: nowrap; flex-shrink: 0; padding-left: 7px; padding-right: 7px; }
+.toolbar::-webkit-scrollbar { display: none; }
+.brand { white-space: nowrap; flex-shrink: 0; }
+.pager { flex-shrink: 0; }

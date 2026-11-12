@@ -1,9 +1,11 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { api, pickPdfPaths, pickSavePath, type DocMeta } from './lib/api'
+import { api, IMAGE_EXTENSIONS, pickImagePaths, pickPdfPaths, pickSavePath, type DocMeta, type OcrStatus, type PageFormat } from './lib/api'
 import { PageImage } from './components/PageImage'
 import { MergeDialog } from './components/MergeDialog'
 import { FontsPanel } from './components/FontsPanel'
 import { EditLayer } from './components/EditLayer'
+import { OcrDialog } from './components/OcrDialog'
+import { NewDialog } from './components/NewDialog'
 import type { EditMode, TextBlock } from './lib/api'
 
 interface OpenDoc extends DocMeta {
@@ -27,6 +29,10 @@ export default function App() {
   const [toast, setToast] = useState<string | null>(null)
   const [dragOver, setDragOver] = useState(false)
   const [editing, setEditing] = useState(false)
+  const [ocr, setOcr] = useState<(OcrStatus & { key: string }) | null>(null)
+  const [ocrOpen, setOcrOpen] = useState(false)
+  const [newOpen, setNewOpen] = useState(false)
+  const [bannerHidden, setBannerHidden] = useState<Set<string>>(new Set())
   const viewer = useRef<HTMLDivElement>(null)
   const [viewerWidth, setViewerWidth] = useState(800)
 
@@ -93,13 +99,40 @@ export default function App() {
           else if (e.payload.type === 'drop') {
             setDragOver(false)
             const pdfs = e.payload.paths.filter((p) => p.toLowerCase().endsWith('.pdf'))
+            const images = e.payload.paths.filter((p) => IMAGE_EXTENSIONS.includes(p.split('.').pop()?.toLowerCase() ?? ''))
             if (pdfs.length) openPaths(pdfs)
+            if (images.length) fromImagesRef.current(images, 'a4', 0)
           }
         })
         .then((u) => (unlisten = u)),
     )
     return () => unlisten?.()
   }, [openPaths])
+
+  // Scanned pages of the active document (offers OCR).
+  useEffect(() => {
+    if (!doc) return setOcr(null)
+    const key = `${doc.id}:${doc.version}`
+    let alive = true
+    api
+      .ocrStatus(doc.id)
+      .then((st) => alive && setOcr({ ...st, key }))
+      .catch(() => alive && setOcr(null))
+    return () => {
+      alive = false
+    }
+  }, [doc?.id, doc?.version])
+
+  // OCR progress, page by page.
+  useEffect(() => {
+    let unlisten: (() => void) | undefined
+    import('@tauri-apps/api/event').then(({ listen }) =>
+      listen<{ id: string; done: number; total: number }>('ocr-progress', (e) =>
+        setBusy(`Reconnaissance du texte… ${Math.min(e.payload.done + 1, e.payload.total)}/${e.payload.total}`),
+      ).then((u) => (unlisten = u)),
+    )
+    return () => unlisten?.()
+  }, [])
 
   // Track viewer width for "fit width".
   useEffect(() => {
@@ -223,10 +256,58 @@ export default function App() {
     replaceDoc(res.doc)
     const notes = [`Police : ${res.font}`]
     if (res.extra_lines > 0 && mode === 'exact')
-      notes.push(`le paragraphe a ${res.extra_lines} ligne(s) de plus : cochez « Décaler la suite » s'il chevauche le texte en dessous`)
+      notes.push(
+        block.scanned
+          ? `le paragraphe a ${res.extra_lines} ligne(s) de plus : raccourcissez-le s'il chevauche la suite`
+          : `le paragraphe a ${res.extra_lines} ligne(s) de plus : cochez « Décaler la suite » s'il chevauche le texte en dessous`,
+      )
     if (!res.lossless && mode === 'exact') notes.push('page réécrite (structure inhabituelle)')
     notify(notes.join(' · '))
     return true
+  }
+
+  const runOcr = async (languages: string[], pages: number[] | null) => {
+    if (!doc) return
+    setOcrOpen(false)
+    const res = await run('Reconnaissance du texte…', () => api.ocrDoc(doc.id, languages, pages))
+    if (!res) return
+    if (res.doc) replaceDoc(res.doc)
+    const s = res.summary
+    if (s.pages.length)
+      notify(
+        `Texte reconnu sur ${s.pages.length} page(s) : ${s.words} mots, fiabilité ${Math.round(s.confidence)} %. ` +
+          'Il peut maintenant être cherché, copié et modifié (« Modifier le texte »).',
+      )
+    else if (s.skipped.length) notify('Ces pages contiennent déjà du texte : rien à reconnaître.')
+    else notify('Aucun texte trouvé sur ces pages.')
+  }
+
+  const fromImages = async (paths: string[] | null, format: PageFormat, margin: number) => {
+    setNewOpen(false)
+    const list = paths ?? (await pickImagePaths())
+    if (!list.length) return
+    const meta = await run('Création du PDF…', () => api.createFromImages(list, format, margin))
+    if (meta) {
+      addDocs([meta])
+      notify(`PDF créé : ${meta.info.page_count} page(s). Pour un scan, utilisez « Reconnaître le texte ».`)
+    }
+  }
+  const fromImagesRef = useRef(fromImages)
+  fromImagesRef.current = fromImages
+
+  const createBlank = async (count: number, format: PageFormat, landscape: boolean) => {
+    setNewOpen(false)
+    const meta = await run('Création…', () => api.createBlank(count, format, landscape))
+    if (meta) addDocs([meta])
+  }
+
+  const insertBlank = async () => {
+    if (!doc) return
+    const meta = await run('Ajout d’une page…', () => api.insertBlank(doc.id, current + 1))
+    if (meta) {
+      replaceDoc(meta)
+      notify(`Page vierge ajoutée après la page ${current + 1}.`)
+    }
   }
 
   const undo = async () => {
@@ -288,6 +369,7 @@ export default function App() {
     <div className="app">
       <header className="toolbar">
         <div className="brand">KB PDF</div>
+        <button onClick={() => setNewOpen(true)} title="Créer un PDF (images, scans, pages vierges)">Nouveau</button>
         <button onClick={openDialog} title="Ouvrir (Ctrl/⌘+O)">Ouvrir</button>
         <button onClick={() => save(false)} disabled={!doc} title="Enregistrer (Ctrl/⌘+S)">Enregistrer</button>
         <button onClick={() => save(true)} disabled={!doc}>Enregistrer sous…</button>
@@ -302,10 +384,18 @@ export default function App() {
         >
           Modifier le texte
         </button>
+        <button
+          onClick={() => setOcrOpen(true)}
+          disabled={!doc || !ocr}
+          title="Reconnaître le texte des pages scannées (OCR)"
+        >
+          OCR
+        </button>
         <button onClick={undo} disabled={!doc} title="Annuler (Ctrl/⌘+Z)">↶</button>
         <span className="sep" />
         <button onClick={() => rotate(270)} disabled={!doc} title="Pivoter à gauche">⟲</button>
         <button onClick={() => rotate(90)} disabled={!doc} title="Pivoter à droite">⟳</button>
+        <button onClick={insertBlank} disabled={!doc} title="Insérer une page vierge après la page actuelle">+ Page</button>
         <button onClick={extractPages} disabled={!doc}>Extraire</button>
         <button onClick={deletePages} disabled={!doc} className="danger">Supprimer</button>
         <span className="grow" />
@@ -387,6 +477,18 @@ export default function App() {
                 <FontsPanel docId={doc.id} version={doc.version} />
               )}
             </aside>
+            <div className="viewer-col">
+            {ocr && ocr.key.startsWith(`${doc.id}:`) && ocr.scanned.length > 0 && !bannerHidden.has(doc.id) && (
+              <div className="scan-banner">
+                <span>
+                  {ocr.scanned.length === doc.info.page_count
+                    ? 'Ce document semble scanné : son texte ne peut pas encore être cherché ni modifié.'
+                    : `${ocr.scanned.length} page(s) semblent scannées.`}
+                </span>
+                <button className="primary" onClick={() => setOcrOpen(true)}>Reconnaître le texte</button>
+                <button className="icon" aria-label="Masquer" onClick={() => setBannerHidden(new Set(bannerHidden).add(doc.id))}>✕</button>
+              </div>
+            )}
             <section className={`viewer ${editing ? 'editing' : ''}`} ref={viewer} onScroll={onScroll}>
               {doc.info.pages.map((p, i) => (
                 <div key={i} data-page={i} className="page-wrap">
@@ -412,6 +514,7 @@ export default function App() {
                 </div>
               ))}
             </section>
+            </div>
           </>
         ) : (
           <div className="welcome">
@@ -419,6 +522,7 @@ export default function App() {
             <p className="muted">Glissez des PDF ici, ou</p>
             <div className="welcome-actions">
               <button className="primary" onClick={openDialog}>Ouvrir un PDF</button>
+              <button onClick={() => setNewOpen(true)}>Créer un PDF</button>
               <button onClick={() => setMerging(true)}>Fusionner des PDF</button>
             </div>
           </div>
@@ -436,7 +540,24 @@ export default function App() {
           onClose={() => setMerging(false)}
         />
       )}
-      {dragOver && <div className="drop-hint">Déposez vos PDF pour les ouvrir</div>}
+      {ocrOpen && doc && ocr && (
+        <OcrDialog
+          languages={ocr.languages}
+          scanned={ocr.scanned}
+          current={current}
+          pageCount={doc.info.page_count}
+          onRun={runOcr}
+          onClose={() => setOcrOpen(false)}
+        />
+      )}
+      {newOpen && (
+        <NewDialog
+          onBlank={createBlank}
+          onImages={(format, margin) => fromImages(null, format, margin)}
+          onClose={() => setNewOpen(false)}
+        />
+      )}
+      {dragOver && <div className="drop-hint">Déposez des PDF pour les ouvrir, ou des images pour en faire un PDF</div>}
       {busy && <div className="busy">{busy}</div>}
       {toast && <div className="toast" onClick={() => setToast(null)}>{toast}</div>}
     </div>

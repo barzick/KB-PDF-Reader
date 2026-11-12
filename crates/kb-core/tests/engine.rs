@@ -153,6 +153,12 @@ fn images_and_blank_pages() {
     let i = info(&blank).unwrap();
     assert_eq!(i.page_count, 3);
     assert!((i.pages[0].width - 792.0).abs() < 1.0);
+
+    let doc = new_text_document(&["Un", "Deux"]).unwrap();
+    let more = insert_blank_page(&doc, 1).unwrap();
+    assert_eq!(info(&more).unwrap().page_count, 3);
+    assert!(text_blocks(&more, 1).unwrap().is_empty());
+    assert!(text_blocks(&more, 2).unwrap()[0].text.contains("Deux"));
 }
 
 #[cfg(feature = "ocr")]

@@ -58,6 +58,8 @@ export interface TextBlock {
   /** Style index of each character of `text`. */
   char_styles: number[]
   justified: boolean
+  /** Text recognised by OCR on a scanned page. */
+  scanned: boolean
 }
 
 export type EditMode = 'exact' | 'shift_below'
@@ -68,6 +70,22 @@ export interface EditOutcome {
   extra_lines: number
   font: string
 }
+
+export interface OcrStatus {
+  /** Installed OCR languages (fra, eng, deu, ita…). */
+  languages: string[]
+  /** Pages that look scanned (1-based). */
+  scanned: number[]
+}
+
+export interface OcrSummary {
+  pages: number[]
+  skipped: number[]
+  words: number
+  confidence: number
+}
+
+export type PageFormat = 'a4' | 'a3' | 'a5' | 'letter' | 'legal' | 'fit'
 
 export interface AssemblePage {
   doc: string
@@ -93,6 +111,23 @@ export const api = {
   editBlock: (id: string, page: number, block: TextBlock, text: string, mode: EditMode, online: boolean) =>
     invoke<EditOutcome>('edit_block', { id, page, block, text, mode, online }),
   docFonts: (id: string) => invoke<FontUsage[]>('doc_fonts', { id }),
+  ocrStatus: (id: string) => invoke<OcrStatus>('ocr_status', { id }),
+  ocrDoc: (id: string, languages: string[], pages: number[] | null) =>
+    invoke<{ doc: DocMeta | null; summary: OcrSummary }>('ocr_doc', { id, languages, pages }),
+  createFromImages: (paths: string[], format: PageFormat, margin: number) =>
+    invoke<DocMeta>('create_from_images', { paths, format, margin }),
+  createBlank: (count: number, format: PageFormat, landscape: boolean) =>
+    invoke<DocMeta>('create_blank', { count, format, landscape }),
+  insertBlank: (id: string, at: number) => invoke<DocMeta>('insert_blank', { id, at }),
+}
+
+export const IMAGE_EXTENSIONS = ['jpg', 'jpeg', 'png', 'tif', 'tiff', 'webp', 'bmp']
+
+export async function pickImagePaths(): Promise<string[]> {
+  const { open } = await import('@tauri-apps/plugin-dialog')
+  const sel = await open({ multiple: true, filters: [{ name: 'Images', extensions: IMAGE_EXTENSIONS }] })
+  if (!sel) return []
+  return Array.isArray(sel) ? sel : [sel]
 }
 
 const PDF_FILTER = [{ name: 'PDF', extensions: ['pdf'] }]

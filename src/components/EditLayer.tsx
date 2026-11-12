@@ -105,7 +105,8 @@ function Editor({
   const [r, g, b] = block.color
   const bold = /bold|black|heavy|semibold/i.test(block.font)
   const italic = /italic|oblique/i.test(block.font)
-  const width = Math.max(block.right - block.x, 160 / scale) * scale
+  // OCR text is re-typeset in a substitute font: leave it a little more room.
+  const width = Math.max((block.right - block.x) * (block.scanned ? 1.06 : 1), 160 / scale) * scale
 
   return (
     <div
@@ -131,9 +132,13 @@ function Editor({
         }}
       />
       <div className="block-editor-bar">
-        <label className="small" title="Déplace le contenu en dessous si le paragraphe change de nombre de lignes">
-          <input type="checkbox" checked={shift} onChange={(e) => setShift(e.target.checked)} /> Décaler la suite
-        </label>
+        {block.scanned ? (
+          <span className="small muted" title="Texte reconnu par OCR : les mots scannés sont masqués et remplacés">Texte scanné</span>
+        ) : (
+          <label className="small" title="Déplace le contenu en dessous si le paragraphe change de nombre de lignes">
+            <input type="checkbox" checked={shift} onChange={(e) => setShift(e.target.checked)} /> Décaler la suite
+          </label>
+        )}
         <span className="grow" />
         <button className="ghost" onClick={onCancel} disabled={saving}>Annuler</button>
         <button className="primary" onClick={save} disabled={saving} title="Ctrl/⌘ + Entrée">

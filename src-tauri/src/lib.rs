@@ -40,6 +40,11 @@ pub fn run() {
       commands::undo,
       commands::page_blocks,
       commands::edit_block,
+      commands::ocr_status,
+      commands::ocr_doc,
+      commands::create_from_images,
+      commands::create_blank,
+      commands::insert_blank,
     ])
     .run(tauri::generate_context!())
     .expect("error while running KB PDF Reader");

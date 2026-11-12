@@ -10,6 +10,7 @@
     "preview": "vite preview",
     "tauri": "tauri",
     "pdfium": "node scripts/fetch-pdfium.mjs",
+    "tessdata": "node scripts/fetch-tessdata.mjs",
     "test:core": "cargo test -p kb-core"
   },
   "dependencies": {

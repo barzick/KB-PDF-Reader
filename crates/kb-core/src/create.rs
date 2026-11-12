@@ -81,3 +81,21 @@ pub fn blank_document(count: u32, format: PageFormat, landscape: bool) -> Result
     }
     Ok(doc.save_to_bytes()?)
 }
+
+/// Inserts a blank page at `index` (0-based; past the end appends), the size
+/// of the neighbouring page.
+pub fn insert_blank_page(bytes: &[u8], index: u32) -> Result<Vec<u8>> {
+    let pdfium = pdfium()?;
+    let mut doc = pdfium.load_pdf_from_byte_slice(bytes, None)?;
+    let count = doc.pages().len();
+    let at = (index as PdfPageIndex).min(count);
+    let (w, h) = if count == 0 {
+        format_size(PageFormat::A4)
+    } else {
+        let p = doc.pages().get(at.saturating_sub(1))?;
+        (p.width().value, p.height().value)
+    };
+    doc.pages_mut()
+        .create_page_at_index(PdfPagePaperSize::Custom(PdfPoints::new(w), PdfPoints::new(h)), at)?;
+    Ok(doc.save_to_bytes()?)
+}

@@ -20,9 +20,11 @@ jobs:
       - name: Dépendances système (Tauri)
         run: |
           sudo apt-get update
-          sudo apt-get install -y libwebkit2gtk-4.1-dev librsvg2-dev fonts-liberation
+          sudo apt-get install -y libwebkit2gtk-4.1-dev librsvg2-dev fonts-liberation libtesseract-dev libleptonica-dev
       - run: node scripts/fetch-pdfium.mjs linux-x64
-      - run: cargo test -p kb-core
+      - run: node scripts/fetch-tessdata.mjs fra eng
+      # Tests link the system Tesseract (faster); the installers compile it in.
+      - run: cargo test -p kb-core --features system-tesseract
         env:
           PDFIUM_DIR: ${{ github.workspace }}/src-tauri/pdfium
       - run: npm ci && npm run build
@@ -39,8 +41,9 @@ jobs:
             pdfium: mac-arm64
             args: --target aarch64-apple-darwin
             rust_target: aarch64-apple-darwin
+          # Built on an Intel runner: Tesseract is compiled natively.
           - label: macOS (Intel)
-            os: macos-latest
+            os: macos-15-intel
             pdfium: mac-x64
             args: --target x86_64-apple-darwin
             rust_target: x86_64-apple-darwin
@@ -59,7 +62,15 @@ jobs:
         with:
           targets: ${{ matrix.rust_target }}
       - uses: Swatinem/rust-cache@v2
+      # Tesseract + Leptonica, compiled once then reused (tesseract-rs cache folder).
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/Library/Application Support/tesseract-rs
+            ~/AppData/Roaming/tesseract-rs
+          key: tesseract-rs-0.4-${{ matrix.pdfium }}
       - run: node scripts/fetch-pdfium.mjs ${{ matrix.pdfium }}
+      - run: node scripts/fetch-tessdata.mjs
       - run: npm ci
       - run: npx tauri build ${{ matrix.args }}
       - name: Installateurs
