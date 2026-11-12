@@ -824,3 +824,113 @@ pub async fn convert_doc(
   .await
   .map_err(|e| e.to_string())?
 }
+
+// ---------------------------------------------------------------- batch
+
+#[derive(serde::Deserialize)]
+#[serde(tag = "action", rename_all = "snake_case")]
+pub enum BatchAction {
+  Compress { level: kb_core::CompressLevel },
+  Convert { target: ConvertTarget },
+  Ocr { languages: Vec<String> },
+  Protect { options: kb_core::ProtectOptions },
+  Watermark { watermark: kb_core::Watermark },
+  HeaderFooter { spec: kb_core::HeaderFooter },
+}
+
+#[derive(Serialize)]
+pub struct BatchResult {
+  file: String,
+  outputs: Vec<String>,
+  error: Option<String>,
+}
+
+#[derive(Serialize, Clone)]
+struct BatchProgress {
+  done: usize,
+  total: usize,
+  file: String,
+}
+
+fn batch_one(path: &std::path::Path, action: &BatchAction, dir: &std::path::Path, tessdata: Option<&std::path::Path>) -> Result<Vec<String>, String> {
+  let raw = std::fs::read(path).map_err(|e| e.to_string())?;
+  let bytes = match kb_core::protection(&raw) {
+    kb_core::Protection::None => raw,
+    kb_core::Protection::Restricted => kb_core::unlock(&raw, "").map_err(|e| e.to_string())?.0,
+    kb_core::Protection::Password => return Err("protégé par mot de passe : ouvrez-le d'abord dans le lecteur".into()),
+  };
+  let stem = path.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_else(|| "document".into());
+  let all: Vec<u32> = (0..kb_core::info(&bytes).map_err(|e| e.to_string())?.page_count).collect();
+  let pdf = |suffix: &str, data: Vec<u8>| -> Result<Vec<String>, String> {
+    let out = free_path(dir, &format!("{stem}{suffix}"), "pdf");
+    std::fs::write(&out, data).map_err(|e| e.to_string())?;
+    Ok(vec![out.display().to_string()])
+  };
+  let e = |e: kb_core::KbError| e.to_string();
+  match action {
+    BatchAction::Compress { level } => pdf(" (compressé)", kb_core::compress(&bytes, *level).map_err(e)?.0),
+    BatchAction::Ocr { languages } => {
+      let dir_t = tessdata.ok_or("modèles OCR introuvables")?;
+      let langs = if languages.is_empty() { "fra+eng".to_string() } else { languages.join("+") };
+      pdf(" (OCR)", kb_core::make_searchable(&bytes, None, dir_t, &langs, |_, _| {}).map_err(e)?.0)
+    }
+    BatchAction::Protect { options } => pdf(" (protégé)", kb_core::protect(&bytes, options).map_err(e)?),
+    BatchAction::Watermark { watermark } => pdf(" (filigrane)", kb_core::add_watermark(&bytes, watermark).map_err(e)?),
+    BatchAction::HeaderFooter { spec } => {
+      let mut spec = spec.clone();
+      if spec.file.is_empty() {
+        spec.file = path.file_name().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default();
+      }
+      pdf(" (numéroté)", kb_core::add_header_footer(&bytes, &spec).map_err(e)?)
+    }
+    BatchAction::Convert { target } => match target {
+      ConvertTarget::Images { format, dpi } => {
+        let mut written = vec![];
+        let width = all.len().to_string().len();
+        kb_core::to_images(&bytes, &all, *dpi, *format, |_, p, data| {
+          let out = free_path(dir, &format!("{stem} p{:0width$}", p + 1), format.extension());
+          std::fs::write(&out, data).map_err(|e| kb_core::KbError::Image(e.to_string()))?;
+          written.push(out.display().to_string());
+          Ok(())
+        })
+        .map_err(e)?;
+        Ok(written)
+      }
+      other => {
+        let (data, ext) = match other {
+          ConvertTarget::Text => (kb_core::to_text(&bytes, &all).map_err(e)?.into_bytes(), "txt"),
+          ConvertTarget::Word => (kb_core::to_docx(&bytes, &all, |_, _| {}).map_err(e)?, "docx"),
+          _ => (kb_core::to_xlsx(&bytes, &all, |_, _| {}).map_err(e)?, "xlsx"),
+        };
+        let out = free_path(dir, &stem, ext);
+        std::fs::write(&out, data).map_err(|e| e.to_string())?;
+        Ok(vec![out.display().to_string()])
+      }
+    },
+  }
+}
+
+/// Applies one action to many PDF files; results go to `dir`, originals are untouched.
+#[tauri::command]
+pub async fn batch_process(app: tauri::AppHandle, paths: Vec<String>, action: BatchAction, dir: String) -> Result<Vec<BatchResult>, String> {
+  use tauri::Emitter;
+  let tessdata = if matches!(action, BatchAction::Ocr { .. }) { Some(tessdata_dir(&app)?) } else { None };
+  tauri::async_runtime::spawn_blocking(move || {
+    let dir = PathBuf::from(dir);
+    std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    let mut results = vec![];
+    for (n, p) in paths.iter().enumerate() {
+      let path = PathBuf::from(p);
+      let file = path.file_name().map(|s| s.to_string_lossy().into_owned()).unwrap_or_else(|| p.clone());
+      let _ = app.emit("batch-progress", BatchProgress { done: n, total: paths.len(), file: file.clone() });
+      let r = batch_one(&path, &action, &dir, tessdata.as_deref());
+      results.push(match r {
+        Ok(outputs) => BatchResult { file, outputs, error: None },
+        Err(error) => BatchResult { file, outputs: vec![], error: Some(error) },
+      });
+    }
+    Ok::<_, String>(results)
+  })
+  .await
+  .map_err(|e| e.to_string())?
+}

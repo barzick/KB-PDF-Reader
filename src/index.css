@@ -356,3 +356,12 @@ button.link { background: none; border: 0; padding: 0; color: var(--accent); tex
   .print-page img { width: 100%; height: 100%; object-fit: contain; }
   html, body, #root { background: #fff !important; height: auto !important; overflow: visible !important; }
 }
+
+/* Batch processing */
+.dialog.wide { width: min(620px, calc(100vw - 32px)); }
+.batch-files { max-height: 220px; overflow: auto; border: 1px solid var(--line, #ddd); border-radius: 8px; padding: 4px; }
+.batch-file { display: flex; align-items: center; gap: 8px; padding: 3px 6px; min-width: 0; }
+.batch-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.batch-file .small.danger-text { flex: 2; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ok-text { color: #16794c; }
+.row-start { display: flex; align-items: center; gap: 10px; }

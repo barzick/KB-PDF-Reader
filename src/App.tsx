@@ -21,6 +21,7 @@ import { HeaderFooterDialog, WatermarkDialog } from './components/DecorateDialog
 import { BookmarksPanel } from './components/BookmarksPanel'
 import { PrintDialog, PrintRoot } from './components/Print'
 import { ConvertDialog, type ConvertKind } from './components/ConvertDialog'
+import { BatchDialog } from './components/BatchDialog'
 import { CompressDialog, CropDialog, PasswordDialog, ProtectDialog, SplitDialog } from './components/DocumentDialogs'
 import { SignatureDialog, fromFile, type PlacedImage } from './components/SignatureDialog'
 import { sliceText } from './lib/pageText'
@@ -45,6 +46,7 @@ export default function App() {
   const [convert, setConvert] = useState<ConvertKind | null>(null)
   const [printJob, setPrintJob] = useState<{ pages: { index: number; width: number; height: number }[]; dpi: number } | null>(null)
   const [merging, setMerging] = useState(false)
+  const [batchOpen, setBatchOpen] = useState(false)
   const [busy, setBusy] = useState<string | null>(null)
   const [toast, setToast] = useState<string | null>(null)
   const [dragOver, setDragOver] = useState(false)
@@ -708,6 +710,7 @@ export default function App() {
             { label: 'Imprimer…', hint: 'Ctrl/⌘+P', onClick: () => setPrintOpen(true), disabled: !doc },
             '—',
             { label: 'Fusionner des PDF…', onClick: () => setMerging(true) },
+            { label: 'Traitement par lots…', hint: 'plusieurs fichiers', onClick: () => setBatchOpen(true) },
             { label: 'Compresser…', onClick: () => setDocDialog('compress'), disabled: !doc },
             { label: 'Protéger par mot de passe…', onClick: () => setDocDialog('protect'), disabled: !doc },
             '—',
@@ -1057,6 +1060,13 @@ export default function App() {
         )}
       </main>
 
+      {batchOpen && (
+        <BatchDialog
+          initial={docs.map((d) => d.path).filter((p): p is string => !!p)}
+          ocrAvailable={ocr ? ocr.languages.length > 0 : true}
+          onClose={() => setBatchOpen(false)}
+        />
+      )}
       {merging && (
         <MergeDialog
           docs={docs}

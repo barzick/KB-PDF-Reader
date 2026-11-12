@@ -256,6 +256,8 @@ export const api = {
   getBookmarks: (id: string) => invoke<Bookmark[]>('get_bookmarks', { id }),
   setBookmarks: (id: string, list: Bookmark[]) => invoke<DocMeta>('set_bookmarks', { id, list }),
   printView: () => invoke<void>('print_view'),
+  batchProcess: (paths: string[], action: BatchAction, dir: string) =>
+    invoke<BatchResult[]>('batch_process', { paths, action, dir }),
   convertDoc: (id: string, target: ConvertTarget, pages: number[], dest: string, ocr: boolean, languages: string[]) =>
     invoke<string[]>('convert_doc', { id, target, pages, dest, ocr, languages }),
   listFields: (id: string) => invoke<FormField[]>('list_fields', { id }),
@@ -276,6 +278,20 @@ export type ConvertTarget =
   | { kind: 'text' }
   | { kind: 'word' }
   | { kind: 'excel' }
+
+export type BatchAction =
+  | { action: 'compress'; level: CompressLevel }
+  | { action: 'convert'; target: ConvertTarget }
+  | { action: 'ocr'; languages: string[] }
+  | { action: 'protect'; options: ProtectOptions }
+  | { action: 'watermark'; watermark: Watermark }
+  | { action: 'header_footer'; spec: HeaderFooter }
+
+export interface BatchResult {
+  file: string
+  outputs: string[]
+  error: string | null
+}
 
 export const IMAGE_EXTENSIONS = ['jpg', 'jpeg', 'png', 'tif', 'tiff', 'webp', 'bmp']
 
