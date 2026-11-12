@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { api, IMAGE_EXTENSIONS, pickImagePaths, pickPdfPaths, pickSavePath, type DocMeta, type OcrStatus, type PageFormat } from './lib/api'
+import { api, IMAGE_EXTENSIONS, pickFolder, pickImagePaths, pickPdfPaths, pickSavePath, type DocMeta, type OcrStatus, type PageFormat } from './lib/api'
 import { PageImage } from './components/PageImage'
 import { MergeDialog } from './components/MergeDialog'
 import { FontsPanel } from './components/FontsPanel'
@@ -11,13 +11,14 @@ import { AnnotToolbar, MARKUP_TOOLS, type AnnotTool } from './components/AnnotTo
 import { AnnotLayer } from './components/AnnotLayer'
 import { lineRects } from './lib/pageText'
 import { LicenseDialog, licenceAccepted } from './components/LicenseDialog'
-import type { EditMode, FormField, HeaderFooter, NewAnnot, PageText, Rect, Rgb, SearchHit, TextBlock, TextStyle, Watermark } from './lib/api'
+import type { CompressLevel, Crop, EditMode, FormField, HeaderFooter, ProtectOptions, NewAnnot, PageText, Rect, Rgb, SearchHit, TextBlock, TextStyle, Watermark } from './lib/api'
 import { TextLayer, type Selection } from './components/TextLayer'
 import { SearchBar } from './components/SearchBar'
 import { FormLayer } from './components/FormLayer'
 import { PlaceLayer } from './components/PlaceLayer'
 import { TextPlaceLayer } from './components/TextPlaceLayer'
 import { HeaderFooterDialog, WatermarkDialog } from './components/DecorateDialog'
+import { CompressDialog, CropDialog, PasswordDialog, ProtectDialog, SplitDialog } from './components/DocumentDialogs'
 import { SignatureDialog, fromFile, type PlacedImage } from './components/SignatureDialog'
 import { sliceText } from './lib/pageText'
 
@@ -67,6 +68,9 @@ export default function App() {
   const [addingText, setAddingText] = useState(false)
   const [textStyle, setTextStyle] = useState<TextStyle>({ family: 'sans', bold: false, italic: false, size: 12, color: [0, 0, 0], opacity: 1 })
   const [decorate, setDecorate] = useState<'watermark' | 'header' | 'numbers' | null>(null)
+  const [docDialog, setDocDialog] = useState<'protect' | 'compress' | 'crop' | 'split' | null>(null)
+  const [locked, setLocked] = useState<string[]>([])
+  const [lockError, setLockError] = useState<string | null>(null)
   const imageInput = useRef<HTMLInputElement>(null)
   const viewer = useRef<HTMLDivElement>(null)
   const [viewerWidth, setViewerWidth] = useState(800)
@@ -103,6 +107,7 @@ export default function App() {
       const res = await run('Ouverture…', () => api.openFiles(paths))
       if (!res) return []
       if (res.errors.length) notify(`Impossible d'ouvrir : ${res.errors.join(' ; ')}`)
+      if (res.locked.length) setLocked((l) => [...l, ...res.locked])
       if (activate) addDocs(res.opened)
       else setDocs((d) => [...d, ...res.opened.map((m) => ({ ...m, version: 0 }))])
       return res.opened
@@ -245,7 +250,8 @@ export default function App() {
     const pageEl = el?.querySelector<HTMLElement>(`[data-page="${h.page}"]`)
     if (!el || !pageEl || !doc) return
     const r = h.rects[0]
-    const y = r ? (doc.info.pages[h.page].height - r[3]) * scale : 0
+    const pg = doc.info.pages[h.page]
+    const y = r ? (pg.height + pg.y0 - r[3]) * scale : 0
     el.scrollTo({ top: pageEl.offsetTop + y - el.clientHeight / 3 })
   }
 
@@ -465,6 +471,60 @@ export default function App() {
     }
   }
 
+  const openLocked = async (password: string) => {
+    const path = locked[0]
+    try {
+      const meta = await api.openLocked(path, password)
+      setLockError(null)
+      setLocked((l) => l.slice(1))
+      addDocs([meta])
+    } catch (e) {
+      setLockError(String(e).includes('incorrect') ? 'Mot de passe incorrect.' : String(e))
+    }
+  }
+
+  const applyProtection = async (p: ProtectOptions | null) => {
+    if (!doc) return
+    setDocDialog(null)
+    const meta = await run('Protection…', () => api.setProtection(doc.id, p))
+    if (meta) {
+      replaceDoc(meta)
+      notify(p ? 'La protection sera appliquée à l\'enregistrement.' : 'Protection retirée : enregistrez pour l\'appliquer.')
+    }
+  }
+
+  const applyCompress = async (level: CompressLevel) => {
+    if (!doc) return
+    setDocDialog(null)
+    const res = await run('Compression…', () => api.compressDoc(doc.id, level))
+    if (!res) return
+    replaceDoc(res.doc)
+    const { before, after, images } = res.result
+    const mb = (n: number) => (n / 1048576).toFixed(n < 1048576 ? 2 : 1).replace('.', ',') + ' Mo'
+    notify(
+      after < before
+        ? `${mb(before)} → ${mb(after)} (−${Math.round((1 - after / before) * 100)} %${images ? `, ${images} image(s)` : ''}). Pensez à enregistrer.`
+        : 'Ce document est déjà compact : rien à gagner à ce niveau.',
+    )
+  }
+
+  const applyCrop = async (pages: number[] | null, crop: Crop) => {
+    if (!doc) return
+    setDocDialog(null)
+    const meta = await run('Rognage…', () => api.cropDoc(doc.id, pages, crop))
+    if (meta) replaceDoc(meta)
+  }
+
+  const applySplit = async (groups: number[][]) => {
+    if (!doc) return
+    const dir = await pickFolder()
+    if (!dir) return
+    setDocDialog(null)
+    const base = doc.name.replace(/\.pdf$/i, '')
+    const files = await run('Division…', () => api.splitDoc(doc.id, groups, dir, base))
+    if (files) notify(`${files.length} fichier(s) créé(s) dans ${dir}`)
+  }
+
   // Highlight / underline / strike out the text just selected.
   const markSelection = async () => {
     const s = selectionRef.current
@@ -595,6 +655,8 @@ export default function App() {
             { label: 'Enregistrer sous…', hint: 'Maj+Ctrl/⌘+S', onClick: () => save(true), disabled: !doc },
             '—',
             { label: 'Fusionner des PDF…', onClick: () => setMerging(true) },
+            { label: 'Compresser…', onClick: () => setDocDialog('compress'), disabled: !doc },
+            { label: 'Protéger par mot de passe…', onClick: () => setDocDialog('protect'), disabled: !doc },
             '—',
             { label: 'Licence et à propos…', onClick: () => setLicence('about') },
           ]}
@@ -608,6 +670,8 @@ export default function App() {
             '—',
             { label: 'Insérer une page vierge', hint: 'après la page actuelle', onClick: insertBlank },
             { label: 'Extraire dans un nouveau PDF', onClick: extractPages },
+            { label: 'Diviser le document…', onClick: () => setDocDialog('split') },
+            { label: 'Rogner…', onClick: () => setDocDialog('crop') },
             { label: 'Supprimer', onClick: deletePages, danger: true },
           ]}
         />
@@ -823,82 +887,89 @@ export default function App() {
                       width={p.width * scale}
                       height={p.height * scale}
                     />
-                    {!editing && (Math.abs(i - current) <= 2 || hits.some((h) => h.page === i)) && (
-                      <TextLayer
-                        docId={doc.id}
-                        version={doc.version}
-                        page={i}
-                        pageHeight={p.height}
-                        scale={scale}
-                        hits={hits.map((hit, n) => ({ hit, active: n === hitIndex })).filter((h) => h.hit.page === i)}
-                        selection={selection?.sel ?? null}
-                        onSelect={(sel, text) => setSelection(sel && text ? { sel, text } : null)}
-                        onCopy={copySelection}
-                        onSelectEnd={markSelection}
-                        noChip={annotating && MARKUP_TOOLS.includes(tool)}
-                      />
-                    )}
-                    {annotating && Math.abs(i - current) <= 2 && (
-                      <AnnotLayer
-                        docId={doc.id}
-                        version={doc.version}
-                        page={i}
-                        pageHeight={p.height}
-                        scale={scale}
-                        tool={tool}
-                        color={annotColor}
-                        width={annotWidth}
-                        stamp={stamp}
-                        onAdd={addAnnot}
-                        onDelete={async (pg, index) => {
-                          const meta = await run('Suppression…', () => api.deleteAnnot(doc.id, pg, index))
-                          if (meta) replaceDoc(meta)
-                        }}
-                        onNote={async (pg, index, text) => {
-                          const meta = await run('Enregistrement…', () => api.setNote(doc.id, pg, index, text))
-                          if (meta) replaceDoc(meta)
-                        }}
-                      />
-                    )}
-                    {!editing && !annotating && !placing && !addingText && Math.abs(i - current) <= 2 && fields.some((f) => f.page === i) && (
-                      <FormLayer
-                        fields={fields.filter((f) => f.page === i)}
-                        pageHeight={p.height}
-                        scale={scale}
-                        onFill={fillField}
-                        onSign={(rect) => setSignOpen({ page: i, rect })}
-                      />
-                    )}
-                    {addingText && Math.abs(i - current) <= 2 && (
-                      <TextPlaceLayer
-                        page={i}
-                        pageHeight={p.height}
-                        scale={scale}
-                        style={textStyle}
-                        onStyle={setTextStyle}
-                        onAdd={addText}
-                      />
-                    )}
-                    {placing && Math.abs(i - current) <= 2 && (
-                      <PlaceLayer
-                        image={placing.image}
-                        page={i}
-                        pageHeight={p.height}
-                        scale={scale}
-                        width={placing.width}
-                        onPlace={placeImage}
-                      />
-                    )}
-                    {editing && Math.abs(i - current) <= 2 && (
-                      <EditLayer
-                        docId={doc.id}
-                        version={doc.version}
-                        page={i}
-                        pageHeight={p.height}
-                        scale={scale}
-                        onEdit={editText}
-                      />
-                    )}
+                    {/* Overlays work in page coordinates: shift them when the visible area does not start at 0, 0. */}
+                    <div
+                      className="page-origin"
+                      style={{ left: -p.x0 * scale, width: (p.width + p.x0) * scale, height: (p.height + p.y0) * scale }}
+                    >
+                      {!editing && (Math.abs(i - current) <= 2 || hits.some((h) => h.page === i)) && (
+                        <TextLayer
+                          docId={doc.id}
+                          version={doc.version}
+                          page={i}
+                          pageHeight={p.height + p.y0}
+                          scale={scale}
+                          hits={hits.map((hit, n) => ({ hit, active: n === hitIndex })).filter((h) => h.hit.page === i)}
+                          selection={selection?.sel ?? null}
+                          onSelect={(sel, text) => setSelection(sel && text ? { sel, text } : null)}
+                          onCopy={copySelection}
+                          onSelectEnd={markSelection}
+                          noChip={annotating && MARKUP_TOOLS.includes(tool)}
+                        />
+                      )}
+                      {annotating && Math.abs(i - current) <= 2 && (
+                        <AnnotLayer
+                          docId={doc.id}
+                          version={doc.version}
+                          page={i}
+                          pageHeight={p.height + p.y0}
+                          scale={scale}
+                          tool={tool}
+                          color={annotColor}
+                          width={annotWidth}
+                          stamp={stamp}
+                          onAdd={addAnnot}
+                          onDelete={async (pg, index) => {
+                            const meta = await run('Suppression…', () => api.deleteAnnot(doc.id, pg, index))
+                            if (meta) replaceDoc(meta)
+                          }}
+                          onNote={async (pg, index, text) => {
+                            const meta = await run('Enregistrement…', () => api.setNote(doc.id, pg, index, text))
+                            if (meta) replaceDoc(meta)
+                          }}
+                        />
+                      )}
+                      {!editing && !annotating && !placing && !addingText && Math.abs(i - current) <= 2 && fields.some((f) => f.page === i) && (
+                        <FormLayer
+                          fields={fields.filter((f) => f.page === i)}
+                          pageHeight={p.height + p.y0}
+                          scale={scale}
+                          onFill={fillField}
+                          onSign={(rect) => setSignOpen({ page: i, rect })}
+                        />
+                      )}
+                      {addingText && Math.abs(i - current) <= 2 && (
+                        <TextPlaceLayer
+                          page={i}
+                          pageHeight={p.height + p.y0}
+                          scale={scale}
+                          style={textStyle}
+                          onStyle={setTextStyle}
+                          origin={[p.x0, p.y0]}
+                          onAdd={addText}
+                        />
+                      )}
+                      {placing && Math.abs(i - current) <= 2 && (
+                        <PlaceLayer
+                          image={placing.image}
+                          page={i}
+                          pageHeight={p.height + p.y0}
+                          scale={scale}
+                          width={placing.width}
+                          onPlace={placeImage}
+                        />
+                      )}
+                      {editing && Math.abs(i - current) <= 2 && (
+                        <EditLayer
+                          docId={doc.id}
+                          version={doc.version}
+                          page={i}
+                          pageHeight={p.height + p.y0}
+                          scale={scale}
+                          onEdit={editText}
+                        />
+                      )}
+                    </div>
                   </div>
                 </div>
               ))}
@@ -957,6 +1028,26 @@ export default function App() {
           onApply={applyHeaderFooter}
           onClose={() => setDecorate(null)}
         />
+      )}
+      {locked.length > 0 && (
+        <PasswordDialog
+          key={locked[0]}
+          name={locked[0].split(/[\\/]/).pop() ?? locked[0]}
+          error={lockError}
+          onOpen={openLocked}
+          onSkip={() => {
+            setLockError(null)
+            setLocked((l) => l.slice(1))
+          }}
+        />
+      )}
+      {docDialog === 'protect' && doc && <ProtectDialog docId={doc.id} onApply={applyProtection} onClose={() => setDocDialog(null)} />}
+      {docDialog === 'compress' && doc && <CompressDialog onApply={applyCompress} onClose={() => setDocDialog(null)} />}
+      {docDialog === 'crop' && doc && (
+        <CropDialog pageCount={doc.info.page_count} current={current} onApply={applyCrop} onClose={() => setDocDialog(null)} />
+      )}
+      {docDialog === 'split' && doc && (
+        <SplitDialog pageCount={doc.info.page_count} onApply={applySplit} onClose={() => setDocDialog(null)} />
       )}
       {signOpen && <SignatureDialog onClose={() => setSignOpen(null)} onPick={pickedSignature} />}
       <input

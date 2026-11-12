@@ -320,3 +320,10 @@ textarea.form-field { padding-top: 2px; }
 .hf-row { display: flex; gap: 12px; }
 .hf-row .field { flex: 1; }
 .danger-text { color: #b42318; }
+.choice { display: flex; gap: 10px; align-items: flex-start; padding: 8px 10px; border: 1px solid var(--line); border-radius: 8px; cursor: pointer; }
+.choice:has(input:checked) { border-color: var(--accent); background: var(--accent-soft); }
+.crop-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.crop-grid input { min-width: 0; }
+button.link { background: none; border: 0; padding: 0; color: var(--accent); text-align: left; cursor: pointer; align-self: flex-start; }
+.dialog-actions .grow { flex: 1; }
+.page-origin { position: absolute; top: 0; }

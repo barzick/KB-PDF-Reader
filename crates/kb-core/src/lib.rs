@@ -16,6 +16,10 @@ mod annot;
 mod create;
 mod forms;
 mod decorate;
+mod security;
+mod optimize;
+pub use optimize::{compress, crop, CompressLevel, CompressResult, Crop};
+pub use security::{protect, protection, unlock, ProtectOptions, Protection};
 pub use decorate::{add_header_footer, add_text, add_watermark, Align, HeaderFooter, TextStyle, Watermark};
 pub use forms::{fill_fields, flatten, list_fields, FieldKind, FieldValue, FormField};
 mod std14;
@@ -86,6 +90,9 @@ pub struct PageInfo {
     /// Size in PDF points (1/72 inch), already accounting for page rotation.
     pub width: f32,
     pub height: f32,
+    /// Bottom-left corner of the visible area in page coordinates (usually 0, 0).
+    pub x0: f32,
+    pub y0: f32,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -100,7 +107,16 @@ pub fn info(bytes: &[u8]) -> Result<DocInfo> {
     let pages: Vec<PageInfo> = doc
         .pages()
         .iter()
-        .map(|p| PageInfo { width: p.width().value, height: p.height().value })
+        .map(|p| {
+            let b = p.boundaries();
+            let r = b.crop().or_else(|_| b.media()).map(|x| x.bounds).ok();
+            PageInfo {
+                width: p.width().value,
+                height: p.height().value,
+                x0: r.map(|r| r.left().value).unwrap_or(0.0),
+                y0: r.map(|r| r.bottom().value).unwrap_or(0.0),
+            }
+        })
         .collect();
     let title = doc
         .metadata()

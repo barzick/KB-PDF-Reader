@@ -7,6 +7,8 @@ interface Props {
   pageHeight: number
   scale: number
   style: TextStyle
+  /** Visible area origin: the text position is sent relative to it. */
+  origin: [number, number]
   onStyle: (s: TextStyle) => void
   onAdd: (page: number, x: number, y: number, text: string) => Promise<void>
 }
@@ -14,7 +16,7 @@ interface Props {
 const FAMILY = { sans: 'Helvetica, Arial, sans-serif', serif: 'Times, "Times New Roman", serif', mono: 'Courier, monospace' }
 
 /** Click on the page, type, and the text becomes part of the page. */
-export function TextPlaceLayer({ page, pageHeight, scale, style, onStyle, onAdd }: Props) {
+export function TextPlaceLayer({ page, pageHeight, scale, style, origin, onStyle, onAdd }: Props) {
   const el = useRef<HTMLDivElement>(null)
   const area = useRef<HTMLTextAreaElement>(null)
   const [at, setAt] = useState<[number, number] | null>(null)
@@ -26,7 +28,7 @@ export function TextPlaceLayer({ page, pageHeight, scale, style, onStyle, onAdd 
 
   const submit = async () => {
     if (!at || !text.trim()) return setAt(null)
-    await onAdd(page, at[0] / scale, pageHeight - at[1] / scale, text)
+    await onAdd(page, at[0] / scale - origin[0], pageHeight - at[1] / scale - origin[1], text)
     setAt(null)
     setText('')
   }

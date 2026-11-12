@@ -17,6 +17,8 @@ pub struct Doc {
   bytes: Arc<Vec<u8>>,
   /// Previous versions, for undo (most recent last).
   history: Vec<Arc<Vec<u8>>>,
+  /// Password protection put back when saving.
+  protect: Option<kb_core::ProtectOptions>,
 }
 
 const MAX_UNDO: usize = 50;
@@ -38,7 +40,7 @@ impl Library {
       dirty: path.is_none(),
       info,
     };
-    self.docs.write().insert(id, Doc { name, path, bytes: Arc::new(bytes), history: vec![] });
+    self.docs.write().insert(id, Doc { name, path, bytes: Arc::new(bytes), history: vec![], protect: None });
     Ok(meta)
   }
 
@@ -61,6 +63,14 @@ impl Library {
     })
   }
 
+  fn insert_protected(&self, name: String, path: Option<PathBuf>, bytes: Vec<u8>, protect: kb_core::ProtectOptions) -> Result<DocMeta, String> {
+    let meta = self.insert(name, path, bytes)?;
+    if let Some(d) = self.docs.write().get_mut(&meta.id) {
+      d.protect = Some(protect);
+    }
+    Ok(meta)
+  }
+
   fn bytes(&self, id: &str) -> Result<Arc<Vec<u8>>, String> {
     self.docs.read().get(id).map(|d| d.bytes.clone()).ok_or_else(|| "document fermé".into())
   }
@@ -80,6 +90,8 @@ pub struct DocMeta {
 pub struct OpenResult {
   opened: Vec<DocMeta>,
   errors: Vec<String>,
+  /// Files that need a password to open.
+  locked: Vec<String>,
 }
 
 fn file_name(p: &std::path::Path) -> String {
@@ -88,18 +100,136 @@ fn file_name(p: &std::path::Path) -> String {
 
 #[tauri::command]
 pub async fn open_files(lib: State<'_, Library>, paths: Vec<String>) -> Result<OpenResult, String> {
-  let mut out = OpenResult { opened: vec![], errors: vec![] };
+  let mut out = OpenResult { opened: vec![], errors: vec![], locked: vec![] };
   for p in paths {
     let path = PathBuf::from(&p);
-    match std::fs::read(&path) {
-      Ok(bytes) => match lib.insert(file_name(&path), Some(path.clone()), bytes) {
-        Ok(m) => out.opened.push(m),
-        Err(e) => out.errors.push(format!("{} : {e}", file_name(&path))),
-      },
+    let bytes = match std::fs::read(&path) {
+      Ok(b) => b,
+      Err(e) => {
+        out.errors.push(format!("{} : {e}", file_name(&path)));
+        continue;
+      }
+    };
+    let res = match kb_core::protection(&bytes) {
+      kb_core::Protection::None => lib.insert(file_name(&path), Some(path.clone()), bytes),
+      kb_core::Protection::Password => {
+        out.locked.push(p.clone());
+        continue;
+      }
+      // Restrictions only: work on a decrypted copy, protect again on save.
+      kb_core::Protection::Restricted => kb_core::unlock(&bytes, "")
+        .map_err(|e| e.to_string())
+        .and_then(|(plain, opts)| lib.insert_protected(file_name(&path), Some(path.clone()), plain, opts)),
+    };
+    match res {
+      Ok(m) => out.opened.push(m),
       Err(e) => out.errors.push(format!("{} : {e}", file_name(&path))),
     }
   }
   Ok(out)
+}
+
+/// Opens a password-protected file.
+#[tauri::command]
+pub async fn open_locked(lib: State<'_, Library>, path: String, password: String) -> Result<DocMeta, String> {
+  let path = PathBuf::from(path);
+  let bytes = std::fs::read(&path).map_err(|e| e.to_string())?;
+  let (plain, opts) = kb_core::unlock(&bytes, &password).map_err(|e| e.to_string())?;
+  lib.insert_protected(file_name(&path), Some(path), plain, opts)
+}
+
+#[derive(Serialize)]
+pub struct ProtectionInfo {
+  protected: bool,
+  has_password: bool,
+  allow_print: bool,
+  allow_copy: bool,
+  allow_modify: bool,
+}
+
+#[tauri::command]
+pub fn doc_protection(lib: State<'_, Library>, id: String) -> Result<ProtectionInfo, String> {
+  let docs = lib.docs.read();
+  let d = docs.get(&id).ok_or("document fermé")?;
+  Ok(match &d.protect {
+    Some(p) => ProtectionInfo {
+      protected: true,
+      has_password: !p.user_password.is_empty(),
+      allow_print: p.allow_print,
+      allow_copy: p.allow_copy,
+      allow_modify: p.allow_modify,
+    },
+    None => ProtectionInfo { protected: false, has_password: false, allow_print: true, allow_copy: true, allow_modify: true },
+  })
+}
+
+/// Sets (or removes, with None) the protection applied when saving.
+#[tauri::command]
+pub fn set_protection(lib: State<'_, Library>, id: String, protect: Option<kb_core::ProtectOptions>) -> Result<DocMeta, String> {
+  let bytes = lib.bytes(&id)?;
+  if let Some(d) = lib.docs.write().get_mut(&id) {
+    d.protect = protect;
+  }
+  // Recorded as a change so that the document asks to be saved.
+  lib.update(&id, bytes.as_ref().clone())
+}
+
+#[derive(Serialize)]
+pub struct CompressOutcome {
+  doc: DocMeta,
+  result: kb_core::CompressResult,
+}
+
+#[tauri::command]
+pub async fn compress_doc(lib: State<'_, Library>, id: String, level: kb_core::CompressLevel) -> Result<CompressOutcome, String> {
+  let bytes = lib.bytes(&id)?;
+  let (out, result) = tauri::async_runtime::spawn_blocking(move || kb_core::compress(&bytes, level))
+    .await
+    .map_err(|e| e.to_string())?
+    .map_err(|e| e.to_string())?;
+  Ok(CompressOutcome { doc: lib.update(&id, out)?, result })
+}
+
+#[tauri::command]
+pub async fn crop_doc(lib: State<'_, Library>, id: String, pages: Option<Vec<u32>>, crop: kb_core::Crop) -> Result<DocMeta, String> {
+  let bytes = lib.bytes(&id)?;
+  let out = kb_core::crop(&bytes, pages.as_deref(), &crop).map_err(|e| e.to_string())?;
+  lib.update(&id, out)
+}
+
+/// Writes one PDF per group of pages into `dir`; returns the file paths.
+#[tauri::command]
+pub async fn split_doc(lib: State<'_, Library>, id: String, groups: Vec<Vec<u32>>, dir: String, base: String) -> Result<Vec<String>, String> {
+  let bytes = lib.bytes(&id)?;
+  let protect = lib.docs.read().get(&id).and_then(|d| d.protect.clone());
+  tauri::async_runtime::spawn_blocking(move || {
+    let dir = PathBuf::from(dir);
+    let mut written = vec![];
+    for (n, g) in groups.iter().enumerate() {
+      if g.is_empty() {
+        continue;
+      }
+      let refs: Vec<PageRef> = g.iter().map(|&page| PageRef { source: 0, page, rotate: 0 }).collect();
+      let mut pdf = kb_core::assemble(&[bytes.as_slice()], &refs).map_err(|e| e.to_string())?;
+      if let Some(p) = &protect {
+        pdf = kb_core::protect(&pdf, p).map_err(|e| e.to_string())?;
+      }
+      let first = g[0] + 1;
+      let last = g[g.len() - 1] + 1;
+      let label = if first == last { format!("p{first}") } else { format!("p{first}-{last}") };
+      let mut path = dir.join(format!("{base} ({n:02} {label}).pdf", n = n + 1));
+      let mut k = 2;
+      while path.exists() {
+        path = dir.join(format!("{base} ({n:02} {label}) {k}.pdf", n = n + 1));
+        k += 1;
+      }
+      std::fs::write(&path, pdf).map_err(|e| e.to_string())?;
+      written.push(path.display().to_string());
+    }
+    Ok::<_, String>(written)
+  })
+  .await
+  .map_err(|e| e.to_string())?
 }
 
 #[tauri::command]
@@ -179,7 +309,12 @@ pub async fn assemble_pages(
 pub async fn save_doc(lib: State<'_, Library>, id: String, path: String) -> Result<String, String> {
   let bytes = lib.bytes(&id)?;
   let path = PathBuf::from(path);
-  std::fs::write(&path, bytes.as_slice()).map_err(|e| e.to_string())?;
+  let protect = lib.docs.read().get(&id).and_then(|d| d.protect.clone());
+  let data = match protect {
+    Some(p) => kb_core::protect(&bytes, &p).map_err(|e| e.to_string())?,
+    None => bytes.as_ref().clone(),
+  };
+  std::fs::write(&path, data).map_err(|e| e.to_string())?;
   let name = file_name(&path);
   if let Some(d) = lib.docs.write().get_mut(&id) {
     d.name = name.clone();

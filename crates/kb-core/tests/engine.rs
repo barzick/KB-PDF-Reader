@@ -398,3 +398,64 @@ fn text_watermark_and_page_numbers() {
     assert_eq!(hits[0].page, 2);
     assert!(hits[0].rects[0][1] < 45.0, "{:?}", hits[0].rects);
 }
+
+#[test]
+fn password_protect_and_unlock() {
+    setup();
+    let doc = new_text_document(&["Secret bancaire"]).unwrap();
+    assert_eq!(protection(&doc), Protection::None);
+    let opts = ProtectOptions {
+        user_password: "été 2026".into(),
+        owner_password: String::new(),
+        allow_print: true,
+        allow_copy: false,
+        allow_modify: false,
+    };
+    let locked = protect(&doc, &opts).unwrap();
+    assert_eq!(protection(&locked), Protection::Password);
+    assert!(unlock(&locked, "faux").is_err());
+    let (open, kept) = unlock(&locked, "été 2026").unwrap();
+    assert_eq!(protection(&open), Protection::None);
+    assert!(page_text(&open, 0).unwrap().text.contains("Secret bancaire"));
+    assert!(kept.allow_print && !kept.allow_copy && !kept.allow_modify);
+
+    // Restrictions only: opens without a password.
+    let restricted = protect(&doc, &ProtectOptions { user_password: String::new(), ..opts }).unwrap();
+    assert_eq!(protection(&restricted), Protection::Restricted);
+    let (open, _) = unlock(&restricted, "").unwrap();
+    assert!(page_text(&open, 0).unwrap().text.contains("Secret bancaire"));
+}
+
+#[test]
+fn compress_and_crop() {
+    setup();
+    // A large smooth "photo" stored losslessly (PNG → Flate).
+    let img = image::RgbImage::from_fn(2400, 1800, |x, y| image::Rgb([(x / 10) as u8, (y / 8) as u8, ((x + y) / 20) as u8]));
+    let mut png = vec![];
+    image::DynamicImage::ImageRgb8(img).write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png).unwrap();
+    let pdf = images_to_pdf(&[&png], PageFormat::A4, 0.0).unwrap();
+    let (small, r) = compress(&pdf, CompressLevel::Medium).unwrap();
+    assert_eq!(r.images, 1);
+    assert!(small.len() < pdf.len() / 3, "{} → {}", pdf.len(), small.len());
+    assert_eq!(info(&small).unwrap().page_count, 1);
+    // Still the same picture (roughly).
+    let a = image::load_from_memory(&render_png(&pdf, 0, 300).unwrap()).unwrap().to_rgb8();
+    let b = image::load_from_memory(&render_png(&small, 0, 300).unwrap()).unwrap().to_rgb8();
+    let diff: f64 = a.pixels().zip(b.pixels()).map(|(p, q)| (p[0] as f64 - q[0] as f64).abs()).sum::<f64>() / a.len() as f64;
+    assert!(diff < 6.0, "image trop abîmée ({diff})");
+    let (same, r) = compress(&pdf, CompressLevel::Lossless).unwrap();
+    assert_eq!(r.images, 0);
+    assert!(same.len() <= pdf.len());
+
+    let doc = new_text_document(&["Bonjour"]).unwrap();
+    let w0 = info(&doc).unwrap().pages[0].width;
+    let cut = crop(&doc, None, &Crop::Margins { margins: [50.0, 40.0, 50.0, 40.0] }).unwrap();
+    let p = &info(&cut).unwrap().pages[0];
+    assert!((p.width - (w0 - 80.0)).abs() < 0.5, "{}", p.width);
+    let tight = crop(&doc, None, &Crop::Content { pad: 10.0 }).unwrap();
+    let p = &info(&tight).unwrap().pages[0];
+    assert!(p.width < 200.0 && p.height < 100.0, "{} × {}", p.width, p.height);
+    assert!(page_text(&tight, 0).unwrap().text.contains("Bonjour"));
+    let back = crop(&tight, None, &Crop::Reset).unwrap();
+    assert!((info(&back).unwrap().pages[0].width - w0).abs() < 0.5);
+}

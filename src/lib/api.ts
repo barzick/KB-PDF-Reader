@@ -4,6 +4,9 @@ import { invoke } from '@tauri-apps/api/core'
 export interface PageInfo {
   width: number
   height: number
+  /** Bottom-left corner of the visible area, in page coordinates. */
+  x0: number
+  y0: number
 }
 
 export interface DocMeta {
@@ -151,6 +154,29 @@ export function parsePages(spec: string, count: number): number[] | null {
   return [...out].sort((x, y) => x - y)
 }
 
+export interface ProtectOptions {
+  user_password: string
+  owner_password: string
+  allow_print: boolean
+  allow_copy: boolean
+  allow_modify: boolean
+}
+
+export interface ProtectionInfo {
+  protected: boolean
+  has_password: boolean
+  allow_print: boolean
+  allow_copy: boolean
+  allow_modify: boolean
+}
+
+export type CompressLevel = 'lossless' | 'light' | 'medium' | 'strong'
+
+export type Crop =
+  | { mode: 'margins'; margins: [number, number, number, number] }
+  | { mode: 'content'; pad: number }
+  | { mode: 'reset' }
+
 export type FieldKind = 'text' | 'checkbox' | 'radio' | 'combo' | 'list' | 'button' | 'signature'
 
 export interface FormField {
@@ -186,7 +212,14 @@ export interface AssemblePage {
 
 export const api = {
   openFiles: (paths: string[]) =>
-    invoke<{ opened: DocMeta[]; errors: string[] }>('open_files', { paths }),
+    invoke<{ opened: DocMeta[]; errors: string[]; locked: string[] }>('open_files', { paths }),
+  openLocked: (path: string, password: string) => invoke<DocMeta>('open_locked', { path, password }),
+  docProtection: (id: string) => invoke<ProtectionInfo>('doc_protection', { id }),
+  setProtection: (id: string, protect: ProtectOptions | null) => invoke<DocMeta>('set_protection', { id, protect }),
+  compressDoc: (id: string, level: CompressLevel) =>
+    invoke<{ doc: DocMeta; result: { before: number; after: number; images: number } }>('compress_doc', { id, level }),
+  cropDoc: (id: string, pages: number[] | null, crop: Crop) => invoke<DocMeta>('crop_doc', { id, pages, crop }),
+  splitDoc: (id: string, groups: number[][], dir: string, base: string) => invoke<string[]>('split_doc', { id, groups, dir, base }),
   closeDoc: (id: string) => invoke<void>('close_doc', { id }),
   renderPage: (id: string, page: number, width: number) =>
     invoke<ArrayBuffer>('render_page', { id, page, width }),
@@ -243,6 +276,12 @@ export async function pickPdfPaths(): Promise<string[]> {
   const sel = await open({ multiple: true, filters: PDF_FILTER })
   if (!sel) return []
   return Array.isArray(sel) ? sel : [sel]
+}
+
+export async function pickFolder(): Promise<string | null> {
+  const { open } = await import('@tauri-apps/plugin-dialog')
+  const sel = await open({ directory: true })
+  return typeof sel === 'string' ? sel : null
 }
 
 export async function pickSavePath(suggested: string): Promise<string | null> {

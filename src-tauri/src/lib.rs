@@ -56,6 +56,12 @@ pub fn run() {
       commands::add_text,
       commands::add_watermark,
       commands::add_header_footer,
+      commands::open_locked,
+      commands::doc_protection,
+      commands::set_protection,
+      commands::compress_doc,
+      commands::crop_doc,
+      commands::split_doc,
       commands::delete_annot,
       commands::set_note,
     ])
