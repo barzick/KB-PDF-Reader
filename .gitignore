@@ -29,3 +29,6 @@ src-tauri/gen/
 # PDFium is downloaded by `npm run pdfium`, never committed
 src-tauri/pdfium/*
 !src-tauri/pdfium/.gitkeep
+# OCR language models are downloaded by `npm run tessdata`, never committed
+src-tauri/tessdata/*
+!src-tauri/tessdata/.gitkeep

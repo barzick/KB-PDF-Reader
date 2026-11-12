@@ -1,0 +1,949 @@
+//! Bridge between the window (TypeScript) and the PDF engine (kb-core).
+
+use std::collections::HashMap;
+use std::path::PathBuf;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Arc;
+
+use kb_core::{DocInfo, EditMode, FontResolver, FontSource, FontUsage, PageRef, Resolution, StandardFamily, TextBlock, WriteFont};
+use parking_lot::{Mutex, RwLock};
+use serde::Serialize;
+use tauri::ipc::Response;
+use tauri::{Manager, State};
+
+pub struct Doc {
+  name: String,
+  path: Option<PathBuf>,
+  bytes: Arc<Vec<u8>>,
+  /// Previous versions, for undo (most recent last).
+  history: Vec<Arc<Vec<u8>>>,
+  /// Password protection put back when saving.
+  protect: Option<kb_core::ProtectOptions>,
+}
+
+const MAX_UNDO: usize = 50;
+
+#[derive(Default)]
+pub struct Library {
+  docs: RwLock<HashMap<String, Doc>>,
+  next: AtomicU64,
+}
+
+impl Library {
+  fn insert(&self, name: String, path: Option<PathBuf>, bytes: Vec<u8>) -> Result<DocMeta, String> {
+    let info = kb_core::info(&bytes).map_err(|e| e.to_string())?;
+    let id = format!("d{}", self.next.fetch_add(1, Ordering::Relaxed) + 1);
+    let meta = DocMeta {
+      id: id.clone(),
+      name: name.clone(),
+      path: path.as_ref().map(|p| p.display().to_string()),
+      dirty: path.is_none(),
+      info,
+    };
+    self.docs.write().insert(id, Doc { name, path, bytes: Arc::new(bytes), history: vec![], protect: None });
+    Ok(meta)
+  }
+
+  /// Replaces a document's content, keeping the previous version for undo.
+  fn update(&self, id: &str, bytes: Vec<u8>) -> Result<DocMeta, String> {
+    let info = kb_core::info(&bytes).map_err(|e| e.to_string())?;
+    let mut docs = self.docs.write();
+    let doc = docs.get_mut(id).ok_or("document fermé")?;
+    let old = std::mem::replace(&mut doc.bytes, Arc::new(bytes));
+    doc.history.push(old);
+    if doc.history.len() > MAX_UNDO {
+      doc.history.remove(0);
+    }
+    Ok(DocMeta {
+      id: id.to_string(),
+      name: doc.name.clone(),
+      path: doc.path.as_ref().map(|p| p.display().to_string()),
+      dirty: true,
+      info,
+    })
+  }
+
+  fn insert_protected(&self, name: String, path: Option<PathBuf>, bytes: Vec<u8>, protect: kb_core::ProtectOptions) -> Result<DocMeta, String> {
+    let meta = self.insert(name, path, bytes)?;
+    if let Some(d) = self.docs.write().get_mut(&meta.id) {
+      d.protect = Some(protect);
+    }
+    Ok(meta)
+  }
+
+  pub(crate) fn bytes(&self, id: &str) -> Result<Arc<Vec<u8>>, String> {
+    self.docs.read().get(id).map(|d| d.bytes.clone()).ok_or_else(|| "document fermé".into())
+  }
+}
+
+#[derive(Serialize)]
+pub struct DocMeta {
+  id: String,
+  name: String,
+  path: Option<String>,
+  /// True when the document only exists in memory (e.g. a fresh merge).
+  dirty: bool,
+  info: DocInfo,
+}
+
+#[derive(Serialize)]
+pub struct OpenResult {
+  opened: Vec<DocMeta>,
+  errors: Vec<String>,
+  /// Files that need a password to open.
+  locked: Vec<String>,
+}
+
+fn file_name(p: &std::path::Path) -> String {
+  p.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| "document.pdf".into())
+}
+
+#[tauri::command]
+pub async fn open_files(lib: State<'_, Library>, paths: Vec<String>) -> Result<OpenResult, String> {
+  let mut out = OpenResult { opened: vec![], errors: vec![], locked: vec![] };
+  for p in paths {
+    let path = PathBuf::from(&p);
+    let bytes = match std::fs::read(&path) {
+      Ok(b) => b,
+      Err(e) => {
+        out.errors.push(format!("{} : {e}", file_name(&path)));
+        continue;
+      }
+    };
+    let res = match kb_core::protection(&bytes) {
+      kb_core::Protection::None => lib.insert(file_name(&path), Some(path.clone()), bytes),
+      kb_core::Protection::Password => {
+        out.locked.push(p.clone());
+        continue;
+      }
+      // Restrictions only: work on a decrypted copy, protect again on save.
+      kb_core::Protection::Restricted => kb_core::unlock(&bytes, "")
+        .map_err(|e| e.to_string())
+        .and_then(|(plain, opts)| lib.insert_protected(file_name(&path), Some(path.clone()), plain, opts)),
+    };
+    match res {
+      Ok(m) => out.opened.push(m),
+      Err(e) => out.errors.push(format!("{} : {e}", file_name(&path))),
+    }
+  }
+  Ok(out)
+}
+
+/// Opens a password-protected file.
+#[tauri::command]
+pub async fn open_locked(lib: State<'_, Library>, path: String, password: String) -> Result<DocMeta, String> {
+  let path = PathBuf::from(path);
+  let bytes = std::fs::read(&path).map_err(|e| e.to_string())?;
+  let (plain, opts) = kb_core::unlock(&bytes, &password).map_err(|e| e.to_string())?;
+  lib.insert_protected(file_name(&path), Some(path), plain, opts)
+}
+
+#[derive(Serialize)]
+pub struct ProtectionInfo {
+  protected: bool,
+  has_password: bool,
+  allow_print: bool,
+  allow_copy: bool,
+  allow_modify: bool,
+}
+
+#[tauri::command]
+pub fn doc_protection(lib: State<'_, Library>, id: String) -> Result<ProtectionInfo, String> {
+  let docs = lib.docs.read();
+  let d = docs.get(&id).ok_or("document fermé")?;
+  Ok(match &d.protect {
+    Some(p) => ProtectionInfo {
+      protected: true,
+      has_password: !p.user_password.is_empty(),
+      allow_print: p.allow_print,
+      allow_copy: p.allow_copy,
+      allow_modify: p.allow_modify,
+    },
+    None => ProtectionInfo { protected: false, has_password: false, allow_print: true, allow_copy: true, allow_modify: true },
+  })
+}
+
+/// Sets (or removes, with None) the protection applied when saving.
+#[tauri::command]
+pub fn set_protection(lib: State<'_, Library>, id: String, protect: Option<kb_core::ProtectOptions>) -> Result<DocMeta, String> {
+  let bytes = lib.bytes(&id)?;
+  if let Some(d) = lib.docs.write().get_mut(&id) {
+    d.protect = protect;
+  }
+  // Recorded as a change so that the document asks to be saved.
+  lib.update(&id, bytes.as_ref().clone())
+}
+
+#[derive(Serialize)]
+pub struct CompressOutcome {
+  doc: DocMeta,
+  result: kb_core::CompressResult,
+}
+
+#[tauri::command]
+pub async fn compress_doc(lib: State<'_, Library>, id: String, level: kb_core::CompressLevel) -> Result<CompressOutcome, String> {
+  let bytes = lib.bytes(&id)?;
+  let (out, result) = tauri::async_runtime::spawn_blocking(move || kb_core::compress(&bytes, level))
+    .await
+    .map_err(|e| e.to_string())?
+    .map_err(|e| e.to_string())?;
+  Ok(CompressOutcome { doc: lib.update(&id, out)?, result })
+}
+
+#[tauri::command]
+pub async fn crop_doc(lib: State<'_, Library>, id: String, pages: Option<Vec<u32>>, crop: kb_core::Crop) -> Result<DocMeta, String> {
+  let bytes = lib.bytes(&id)?;
+  let out = kb_core::crop(&bytes, pages.as_deref(), &crop).map_err(|e| e.to_string())?;
+  lib.update(&id, out)
+}
+
+/// Writes one PDF per group of pages into `dir`; returns the file paths.
+#[tauri::command]
+pub async fn split_doc(lib: State<'_, Library>, id: String, groups: Vec<Vec<u32>>, dir: String, base: String) -> Result<Vec<String>, String> {
+  let bytes = lib.bytes(&id)?;
+  let protect = lib.docs.read().get(&id).and_then(|d| d.protect.clone());
+  tauri::async_runtime::spawn_blocking(move || {
+    let dir = PathBuf::from(dir);
+    let mut written = vec![];
+    for (n, g) in groups.iter().enumerate() {
+      if g.is_empty() {
+        continue;
+      }
+      let refs: Vec<PageRef> = g.iter().map(|&page| PageRef { source: 0, page, rotate: 0 }).collect();
+      let mut pdf = kb_core::assemble(&[bytes.as_slice()], &refs).map_err(|e| e.to_string())?;
+      if let Some(p) = &protect {
+        pdf = kb_core::protect(&pdf, p).map_err(|e| e.to_string())?;
+      }
+      let first = g[0] + 1;
+      let last = g[g.len() - 1] + 1;
+      let label = if first == last { format!("p{first}") } else { format!("p{first}-{last}") };
+      let mut path = dir.join(format!("{base} ({n:02} {label}).pdf", n = n + 1));
+      let mut k = 2;
+      while path.exists() {
+        path = dir.join(format!("{base} ({n:02} {label}) {k}.pdf", n = n + 1));
+        k += 1;
+      }
+      std::fs::write(&path, pdf).map_err(|e| e.to_string())?;
+      written.push(path.display().to_string());
+    }
+    Ok::<_, String>(written)
+  })
+  .await
+  .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+pub fn close_doc(lib: State<'_, Library>, id: String) {
+  lib.docs.write().remove(&id);
+}
+
+/// Returns the page as raw PNG bytes (an ArrayBuffer on the JS side).
+#[tauri::command]
+pub async fn render_page(lib: State<'_, Library>, id: String, page: u32, width: u32) -> Result<Response, String> {
+  let bytes = lib.bytes(&id)?;
+  let png = tauri::async_runtime::spawn_blocking(move || kb_core::render_png(&bytes, page, width))
+    .await
+    .map_err(|e| e.to_string())?
+    .map_err(|e| e.to_string())?;
+  Ok(Response::new(png))
+}
+
+#[tauri::command]
+pub async fn merge_docs(lib: State<'_, Library>, ids: Vec<String>, name: String) -> Result<DocMeta, String> {
+  let sources = ids.iter().map(|id| lib.bytes(id)).collect::<Result<Vec<_>, _>>()?;
+  let merged = tauri::async_runtime::spawn_blocking(move || {
+    let refs: Vec<&[u8]> = sources.iter().map(|b| b.as_slice()).collect();
+    kb_core::merge(&refs)
+  })
+  .await
+  .map_err(|e| e.to_string())?
+  .map_err(|e| e.to_string())?;
+  lib.insert(name, None, merged)
+}
+
+/// Builds a new document from pages of open documents (reorder, delete, extract, rotate).
+/// When `replace` is set, the result replaces that document in place instead of opening a new one.
+#[derive(serde::Deserialize)]
+pub struct AssemblePage {
+  doc: String,
+  page: u32,
+  #[serde(default)]
+  rotate: u16,
+}
+
+#[tauri::command]
+pub async fn assemble_pages(
+  lib: State<'_, Library>,
+  pages: Vec<AssemblePage>,
+  name: String,
+  replace: Option<String>,
+) -> Result<DocMeta, String> {
+  let mut ids: Vec<String> = vec![];
+  let mut refs = vec![];
+  for p in &pages {
+    let source = match ids.iter().position(|i| i == &p.doc) {
+      Some(i) => i,
+      None => {
+        ids.push(p.doc.clone());
+        ids.len() - 1
+      }
+    };
+    refs.push(PageRef { source, page: p.page, rotate: p.rotate });
+  }
+  let sources = ids.iter().map(|id| lib.bytes(id)).collect::<Result<Vec<_>, _>>()?;
+  let built = tauri::async_runtime::spawn_blocking(move || {
+    let s: Vec<&[u8]> = sources.iter().map(|b| b.as_slice()).collect();
+    kb_core::assemble(&s, &refs)
+  })
+  .await
+  .map_err(|e| e.to_string())?
+  .map_err(|e| e.to_string())?;
+
+  if let Some(id) = replace {
+    return lib.update(&id, built);
+  }
+  lib.insert(name, None, built)
+}
+
+#[tauri::command]
+pub async fn save_doc(lib: State<'_, Library>, id: String, path: String) -> Result<String, String> {
+  let bytes = lib.bytes(&id)?;
+  let path = PathBuf::from(path);
+  let protect = lib.docs.read().get(&id).and_then(|d| d.protect.clone());
+  let data = match protect {
+    Some(p) => kb_core::protect(&bytes, &p).map_err(|e| e.to_string())?,
+    None => bytes.as_ref().clone(),
+  };
+  std::fs::write(&path, data).map_err(|e| e.to_string())?;
+  let name = file_name(&path);
+  if let Some(d) = lib.docs.write().get_mut(&id) {
+    d.name = name.clone();
+    d.path = Some(path);
+  }
+  Ok(name)
+}
+
+#[tauri::command]
+pub async fn doc_fonts(lib: State<'_, Library>, id: String) -> Result<Vec<FontUsage>, String> {
+  let bytes = lib.bytes(&id)?;
+  kb_core::fonts(&bytes).map_err(|e| e.to_string())
+}
+
+/// PDF paths passed on the command line (e.g. "Open with KB PDF Reader" on Windows).
+#[tauri::command]
+pub fn startup_files() -> Vec<String> {
+  std::env::args()
+    .skip(1)
+    .filter(|a| a.to_lowercase().ends_with(".pdf") && std::path::Path::new(a).is_file())
+    .collect()
+}
+
+/// Font resolver shared by all documents; created on first use.
+#[derive(Default)]
+pub struct Fonts(Arc<Mutex<Option<FontResolver>>>);
+
+/// Finds a complete font for each font of the document:
+/// this computer → free download (cached) → equivalent with same widths.
+#[tauri::command]
+pub async fn resolve_fonts(
+  app: tauri::AppHandle,
+  lib: State<'_, Library>,
+  fonts: State<'_, Fonts>,
+  id: String,
+  online: bool,
+) -> Result<Vec<Resolution>, String> {
+  let bytes = lib.bytes(&id)?;
+  let cache = app.path().app_data_dir().map_err(|e| e.to_string())?.join("fonts");
+  let shared = fonts.0.clone();
+  tauri::async_runtime::spawn_blocking(move || {
+    let usages = kb_core::fonts(&bytes).map_err(|e| e.to_string())?;
+    let mut guard = shared.lock();
+    let resolver = guard.get_or_insert_with(|| FontResolver::new(&cache, online));
+    resolver.set_online(online);
+    Ok(resolver.resolve_all(&usages))
+  })
+  .await
+  .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+pub async fn undo(lib: State<'_, Library>, id: String) -> Result<Option<DocMeta>, String> {
+  let mut docs = lib.docs.write();
+  let doc = docs.get_mut(&id).ok_or("document fermé")?;
+  let Some(prev) = doc.history.pop() else { return Ok(None) };
+  doc.bytes = prev;
+  let info = kb_core::info(&doc.bytes).map_err(|e| e.to_string())?;
+  Ok(Some(DocMeta {
+    id,
+    name: doc.name.clone(),
+    path: doc.path.as_ref().map(|p| p.display().to_string()),
+    dirty: true,
+    info,
+  }))
+}
+
+/// Paragraphs of a page, for the text editing mode.
+#[tauri::command]
+pub async fn page_blocks(lib: State<'_, Library>, id: String, page: u32) -> Result<Vec<TextBlock>, String> {
+  let bytes = lib.bytes(&id)?;
+  tauri::async_runtime::spawn_blocking(move || kb_core::text_blocks(&bytes, page))
+    .await
+    .map_err(|e| e.to_string())?
+    .map_err(|e| e.to_string())
+}
+
+#[derive(Serialize)]
+pub struct EditOutcome {
+  doc: DocMeta,
+  /// The rest of the page was kept exactly as it was.
+  lossless: bool,
+  extra_lines: i32,
+  /// Font actually used to write, e.g. "Arial" or "Arimo (remplace Arial)".
+  font: String,
+}
+
+/// Rewrites one paragraph. The font is found by the resolver (computer →
+/// download → equivalent); the 14 standard PDF fonts are the last resort.
+#[tauri::command]
+pub async fn edit_block(
+  app: tauri::AppHandle,
+  lib: State<'_, Library>,
+  fonts: State<'_, Fonts>,
+  id: String,
+  page: u32,
+  block: TextBlock,
+  text: String,
+  mode: EditMode,
+  online: bool,
+) -> Result<EditOutcome, String> {
+  let bytes = lib.bytes(&id)?;
+  let cache = app.path().app_data_dir().map_err(|e| e.to_string())?.join("fonts");
+  let shared = fonts.0.clone();
+  let (result, font_label) = tauri::async_runtime::spawn_blocking(move || {
+    let used = kb_core::fonts(&bytes).unwrap_or_default();
+    // One font per style run (bold, italic… parts of the paragraph).
+    let mut names: Vec<String> = block.styles.iter().map(|s| s.font.clone()).collect();
+    if names.is_empty() {
+      names.push(block.font.clone());
+    }
+    let mut picks: Vec<(Option<String>, bool, bool, StandardFamily, String)> = Vec::new();
+    for name in &names {
+      let usage = used.iter().find(|f| &f.raw_name == name).cloned().unwrap_or_else(|| FontUsage {
+        family: kb_core::normalize_font_name(name),
+        raw_name: name.clone(),
+        embedded: false,
+        bold: kb_core::weight_from_name(name) >= 600,
+        italic: name.to_lowercase().contains("italic") || name.to_lowercase().contains("oblique"),
+        weight: kb_core::weight_from_name(name),
+        pages: vec![page + 1],
+      });
+      let resolution = {
+        let mut guard = shared.lock();
+        let resolver = guard.get_or_insert_with(|| FontResolver::new(&cache, online));
+        resolver.set_online(online);
+        resolver.resolve(&usage)
+      };
+      let (path, label) = match &resolution.source {
+        FontSource::System { path } | FontSource::Downloaded { path } => (Some(path.clone()), resolution.family.clone()),
+        FontSource::Substitute { family, path, .. } => (Some(path.clone()), format!("{family} (remplace {})", resolution.family)),
+        FontSource::Missing => (None, format!("police standard (remplace {})", resolution.family)),
+      };
+      let lower = resolution.family.to_lowercase();
+      let family = if lower.contains("mono") || lower.contains("courier") {
+        StandardFamily::Mono
+      } else if lower.contains("times") || lower.contains("serif") && !lower.contains("sans") {
+        StandardFamily::Serif
+      } else {
+        StandardFamily::Sans
+      };
+      picks.push((path, resolution.weight >= 600, resolution.italic, family, label));
+    }
+    let mut labels: Vec<String> = Vec::new();
+    for p in &picks {
+      if !labels.contains(&p.4) {
+        labels.push(p.4.clone());
+      }
+    }
+    let label = labels.join(", ");
+    let fonts: Vec<WriteFont> = picks
+      .iter()
+      .map(|(path, bold, italic, family, _)| match path {
+        Some(p) => WriteFont::File(std::path::Path::new(p)),
+        None => WriteFont::Standard { bold: *bold, italic: *italic, family: *family },
+      })
+      .collect();
+    kb_core::replace_block(&bytes, page, &block, &text, fonts, mode)
+      .map(|r| (r, label))
+      .map_err(|e| e.to_string())
+  })
+  .await
+  .map_err(|e| e.to_string())??;
+
+  let doc = lib.update(&id, result.bytes)?;
+  Ok(EditOutcome { doc, lossless: result.lossless, extra_lines: result.extra_lines, font: font_label })
+}
+
+// ---------------------------------------------------------------- OCR
+
+/// The OCR language models ship inside the app ("tessdata" resource folder).
+/// KB_TESSDATA_DIR overrides it (development).
+fn tessdata_dir(app: &tauri::AppHandle) -> Result<PathBuf, String> {
+  std::env::var("KB_TESSDATA_DIR")
+    .map(PathBuf::from)
+    .ok()
+    .or_else(|| app.path().resource_dir().ok().map(|d| d.join("tessdata")))
+    .filter(|d| d.is_dir())
+    .ok_or_else(|| "modèles OCR introuvables".to_string())
+}
+
+#[derive(Serialize)]
+pub struct OcrStatus {
+  /// Installed languages (Tesseract codes: fra, eng, deu, ita…).
+  languages: Vec<String>,
+  /// Pages that look scanned (no text), 1-based.
+  scanned: Vec<u32>,
+}
+
+#[tauri::command]
+pub async fn ocr_status(app: tauri::AppHandle, lib: State<'_, Library>, id: String) -> Result<OcrStatus, String> {
+  let bytes = lib.bytes(&id)?;
+  let languages = tessdata_dir(&app).map(|d| kb_core::ocr_languages(&d)).unwrap_or_default();
+  let scanned = tauri::async_runtime::spawn_blocking(move || kb_core::scanned_pages(&bytes))
+    .await
+    .map_err(|e| e.to_string())?
+    .map_err(|e| e.to_string())?;
+  Ok(OcrStatus { languages, scanned: scanned.into_iter().map(|p| p + 1).collect() })
+}
+
+#[derive(Serialize, Clone)]
+struct OcrProgress {
+  id: String,
+  done: usize,
+  total: usize,
+}
+
+#[derive(Serialize)]
+pub struct OcrOutcome {
+  doc: Option<DocMeta>,
+  summary: kb_core::OcrSummary,
+}
+
+/// Recognises the text of scanned pages (1-based `pages`, all when empty) and
+/// adds it as an invisible, searchable and editable layer.
+#[tauri::command]
+pub async fn ocr_doc(
+  app: tauri::AppHandle,
+  lib: State<'_, Library>,
+  id: String,
+  languages: Vec<String>,
+  pages: Option<Vec<u32>>,
+) -> Result<OcrOutcome, String> {
+  use tauri::Emitter;
+  let bytes = lib.bytes(&id)?;
+  let tessdata = tessdata_dir(&app)?;
+  let langs = if languages.is_empty() { "fra+eng".to_string() } else { languages.join("+") };
+  let emitter = app.clone();
+  let doc_id = id.clone();
+  let (out, summary) = tauri::async_runtime::spawn_blocking(move || {
+    let pages: Option<Vec<u32>> = pages.map(|p| p.into_iter().filter(|&n| n > 0).map(|n| n - 1).collect());
+    kb_core::make_searchable(&bytes, pages.as_deref(), &tessdata, &langs, |done, total| {
+      let _ = emitter.emit("ocr-progress", OcrProgress { id: doc_id.clone(), done, total });
+    })
+  })
+  .await
+  .map_err(|e| e.to_string())?
+  .map_err(|e| e.to_string())?;
+  let doc = if summary.pages.is_empty() { None } else { Some(lib.update(&id, out)?) };
+  Ok(OcrOutcome { doc, summary })
+}
+
+// ---------------------------------------------------------------- creation
+
+#[tauri::command]
+pub async fn create_from_images(
+  lib: State<'_, Library>,
+  paths: Vec<String>,
+  format: kb_core::PageFormat,
+  margin: f32,
+) -> Result<DocMeta, String> {
+  let files = paths.iter().map(std::fs::read).collect::<Result<Vec<_>, _>>().map_err(|e| e.to_string())?;
+  let name = match paths.first() {
+    Some(p) if paths.len() == 1 => {
+      let stem = PathBuf::from(p).file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default();
+      format!("{stem}.pdf")
+    }
+    _ => "Images.pdf".into(),
+  };
+  let pdf = tauri::async_runtime::spawn_blocking(move || {
+    let refs: Vec<&[u8]> = files.iter().map(|f| f.as_slice()).collect();
+    kb_core::images_to_pdf(&refs, format, margin)
+  })
+  .await
+  .map_err(|e| e.to_string())?
+  .map_err(|e| e.to_string())?;
+  lib.insert(name, None, pdf)
+}
+
+#[tauri::command]
+pub async fn create_blank(lib: State<'_, Library>, count: u32, format: kb_core::PageFormat, landscape: bool) -> Result<DocMeta, String> {
+  let pdf = kb_core::blank_document(count, format, landscape).map_err(|e| e.to_string())?;
+  lib.insert("Nouveau document.pdf".into(), None, pdf)
+}
+
+/// Inserts a blank page before page `at` (0-based; the page count appends).
+#[tauri::command]
+pub async fn insert_blank(lib: State<'_, Library>, id: String, at: u32) -> Result<DocMeta, String> {
+  let bytes = lib.bytes(&id)?;
+  let out = kb_core::insert_blank_page(&bytes, at).map_err(|e| e.to_string())?;
+  lib.update(&id, out)
+}
+
+// ---------------------------------------------------------------- text
+
+#[tauri::command]
+pub async fn page_text(lib: State<'_, Library>, id: String, page: u32) -> Result<kb_core::PageText, String> {
+  let bytes = lib.bytes(&id)?;
+  tauri::async_runtime::spawn_blocking(move || kb_core::page_text(&bytes, page))
+    .await
+    .map_err(|e| e.to_string())?
+    .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn search_doc(
+  lib: State<'_, Library>,
+  id: String,
+  query: String,
+  match_case: bool,
+) -> Result<Vec<kb_core::SearchHit>, String> {
+  let bytes = lib.bytes(&id)?;
+  tauri::async_runtime::spawn_blocking(move || kb_core::search(&bytes, &query, match_case))
+    .await
+    .map_err(|e| e.to_string())?
+    .map_err(|e| e.to_string())
+}
+
+// ---------------------------------------------------------------- annotations
+
+#[tauri::command]
+pub async fn list_annots(lib: State<'_, Library>, id: String, page: u32) -> Result<Vec<kb_core::AnnotInfo>, String> {
+  let bytes = lib.bytes(&id)?;
+  kb_core::list_annotations(&bytes, page).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn add_annot(lib: State<'_, Library>, id: String, page: u32, annot: kb_core::NewAnnot) -> Result<DocMeta, String> {
+  let bytes = lib.bytes(&id)?;
+  let out = tauri::async_runtime::spawn_blocking(move || kb_core::add_annotation(&bytes, page, &annot))
+    .await
+    .map_err(|e| e.to_string())?
+    .map_err(|e| e.to_string())?;
+  lib.update(&id, out)
+}
+
+#[tauri::command]
+pub async fn delete_annot(lib: State<'_, Library>, id: String, page: u32, index: usize) -> Result<DocMeta, String> {
+  let bytes = lib.bytes(&id)?;
+  let out = kb_core::delete_annotation(&bytes, page, index).map_err(|e| e.to_string())?;
+  lib.update(&id, out)
+}
+
+#[tauri::command]
+pub async fn set_note(lib: State<'_, Library>, id: String, page: u32, index: usize, text: String) -> Result<DocMeta, String> {
+  let bytes = lib.bytes(&id)?;
+  let out = kb_core::set_note_text(&bytes, page, index, &text).map_err(|e| e.to_string())?;
+  lib.update(&id, out)
+}
+
+#[tauri::command]
+pub async fn list_fields(lib: State<'_, Library>, id: String) -> Result<Vec<kb_core::FormField>, String> {
+  let bytes = lib.bytes(&id)?;
+  kb_core::list_fields(&bytes).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn fill_fields(lib: State<'_, Library>, id: String, values: Vec<kb_core::FieldValue>) -> Result<DocMeta, String> {
+  let bytes = lib.bytes(&id)?;
+  let out = kb_core::fill_fields(&bytes, &values).map_err(|e| e.to_string())?;
+  lib.update(&id, out)
+}
+
+#[tauri::command]
+pub async fn flatten_doc(lib: State<'_, Library>, id: String) -> Result<DocMeta, String> {
+  let bytes = lib.bytes(&id)?;
+  let out = tauri::async_runtime::spawn_blocking(move || kb_core::flatten(&bytes))
+    .await
+    .map_err(|e| e.to_string())?
+    .map_err(|e| e.to_string())?;
+  lib.update(&id, out)
+}
+
+#[tauri::command]
+pub async fn add_text(
+  lib: State<'_, Library>,
+  id: String,
+  page: u32,
+  x: f32,
+  y: f32,
+  text: String,
+  style: kb_core::TextStyle,
+) -> Result<DocMeta, String> {
+  let bytes = lib.bytes(&id)?;
+  let out = kb_core::add_text(&bytes, page, x, y, &text, style).map_err(|e| e.to_string())?;
+  lib.update(&id, out)
+}
+
+#[tauri::command]
+pub async fn add_watermark(lib: State<'_, Library>, id: String, watermark: kb_core::Watermark) -> Result<DocMeta, String> {
+  let bytes = lib.bytes(&id)?;
+  let out = tauri::async_runtime::spawn_blocking(move || kb_core::add_watermark(&bytes, &watermark))
+    .await
+    .map_err(|e| e.to_string())?
+    .map_err(|e| e.to_string())?;
+  lib.update(&id, out)
+}
+
+#[tauri::command]
+pub async fn add_header_footer(lib: State<'_, Library>, id: String, spec: kb_core::HeaderFooter) -> Result<DocMeta, String> {
+  let bytes = lib.bytes(&id)?;
+  let out = tauri::async_runtime::spawn_blocking(move || kb_core::add_header_footer(&bytes, &spec))
+    .await
+    .map_err(|e| e.to_string())?
+    .map_err(|e| e.to_string())?;
+  lib.update(&id, out)
+}
+
+#[tauri::command]
+pub async fn get_bookmarks(lib: State<'_, Library>, id: String) -> Result<Vec<kb_core::Bookmark>, String> {
+  let bytes = lib.bytes(&id)?;
+  kb_core::bookmarks(&bytes).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn set_bookmarks(lib: State<'_, Library>, id: String, list: Vec<kb_core::Bookmark>) -> Result<DocMeta, String> {
+  let bytes = lib.bytes(&id)?;
+  let out = kb_core::set_bookmarks(&bytes, &list).map_err(|e| e.to_string())?;
+  lib.update(&id, out)
+}
+
+/// Opens the system print dialog for the window (the page shows only the print pages).
+#[tauri::command]
+pub fn print_view(window: tauri::WebviewWindow) -> Result<(), String> {
+  window.print().map_err(|e| e.to_string())
+}
+
+// ---------------------------------------------------------------- conversions
+
+#[derive(serde::Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum ConvertTarget {
+  Images { format: kb_core::ImageKind, dpi: u32 },
+  Text,
+  Word,
+  Excel,
+}
+
+#[derive(Serialize, Clone)]
+struct ConvertProgress {
+  id: String,
+  /// "ocr" while recognising scanned pages, then "convert".
+  stage: &'static str,
+  done: usize,
+  total: usize,
+}
+
+/// A path in `dir` named `name.ext`, numbered when the name is taken.
+fn free_path(dir: &std::path::Path, name: &str, ext: &str) -> PathBuf {
+  let mut path = dir.join(format!("{name}.{ext}"));
+  let mut k = 2;
+  while path.exists() {
+    path = dir.join(format!("{name} {k}.{ext}"));
+    k += 1;
+  }
+  path
+}
+
+/// Converts the given pages (0-based) to images (one file per page in the
+/// folder `dest`) or to a text, Word or Excel file (`dest` is the file).
+/// With `ocr`, scanned pages are recognised first so their text is converted too.
+#[tauri::command]
+pub async fn convert_doc(
+  app: tauri::AppHandle,
+  lib: State<'_, Library>,
+  id: String,
+  target: ConvertTarget,
+  pages: Vec<u32>,
+  dest: String,
+  ocr: bool,
+  languages: Vec<String>,
+) -> Result<Vec<String>, String> {
+  use tauri::Emitter;
+  let mut bytes = lib.bytes(&id)?;
+  let base = lib.docs.read().get(&id).map(|d| d.name.trim_end_matches(".pdf").trim_end_matches(".PDF").to_string()).unwrap_or_default();
+  let tessdata = if ocr && !matches!(target, ConvertTarget::Images { .. }) { Some(tessdata_dir(&app)?) } else { None };
+  let emitter = app.clone();
+  tauri::async_runtime::spawn_blocking(move || {
+    let emit = |stage, done, total| {
+      let _ = emitter.emit("convert-progress", ConvertProgress { id: id.clone(), stage, done, total });
+    };
+    if let Some(dir) = tessdata {
+      let langs = if languages.is_empty() { "fra+eng".to_string() } else { languages.join("+") };
+      let (out, _) = kb_core::make_searchable(&bytes, Some(&pages), &dir, &langs, |d, t| emit("ocr", d, t)).map_err(|e| e.to_string())?;
+      bytes = Arc::new(out);
+    }
+    let progress = |d, t| emit("convert", d, t);
+    let dest = PathBuf::from(dest);
+    let written = match target {
+      ConvertTarget::Images { format, dpi } => {
+        std::fs::create_dir_all(&dest).map_err(|e| e.to_string())?;
+        let mut written = vec![];
+        let width = pages.iter().max().map(|m| (m + 1).to_string().len()).unwrap_or(1);
+        kb_core::to_images(&bytes, &pages, dpi, format, |n, p, data| {
+          let path = free_path(&dest, &format!("{base} p{:0width$}", p + 1), format.extension());
+          std::fs::write(&path, data).map_err(|e| kb_core::KbError::Image(e.to_string()))?;
+          written.push(path.display().to_string());
+          progress(n + 1, pages.len());
+          Ok(())
+        })
+        .map_err(|e| e.to_string())?;
+        written
+      }
+      other => {
+        let data = match other {
+          ConvertTarget::Text => kb_core::to_text(&bytes, &pages).map(String::into_bytes),
+          ConvertTarget::Word => kb_core::to_docx(&bytes, &pages, progress),
+          _ => kb_core::to_xlsx(&bytes, &pages, progress),
+        }
+        .map_err(|e| e.to_string())?;
+        std::fs::write(&dest, data).map_err(|e| e.to_string())?;
+        vec![dest.display().to_string()]
+      }
+    };
+    Ok::<_, String>(written)
+  })
+  .await
+  .map_err(|e| e.to_string())?
+}
+
+// ---------------------------------------------------------------- batch
+
+#[derive(serde::Deserialize)]
+#[serde(tag = "action", rename_all = "snake_case")]
+pub enum BatchAction {
+  Compress { level: kb_core::CompressLevel },
+  Convert { target: ConvertTarget },
+  Ocr { languages: Vec<String> },
+  Protect { options: kb_core::ProtectOptions },
+  Watermark { watermark: kb_core::Watermark },
+  HeaderFooter { spec: kb_core::HeaderFooter },
+}
+
+#[derive(Serialize)]
+pub struct BatchResult {
+  file: String,
+  outputs: Vec<String>,
+  error: Option<String>,
+}
+
+#[derive(Serialize, Clone)]
+struct BatchProgress {
+  done: usize,
+  total: usize,
+  file: String,
+}
+
+fn batch_one(path: &std::path::Path, action: &BatchAction, dir: &std::path::Path, tessdata: Option<&std::path::Path>) -> Result<Vec<String>, String> {
+  let raw = std::fs::read(path).map_err(|e| e.to_string())?;
+  let bytes = match kb_core::protection(&raw) {
+    kb_core::Protection::None => raw,
+    kb_core::Protection::Restricted => kb_core::unlock(&raw, "").map_err(|e| e.to_string())?.0,
+    kb_core::Protection::Password => return Err("protégé par mot de passe : ouvrez-le d'abord dans le lecteur".into()),
+  };
+  let stem = path.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_else(|| "document".into());
+  let all: Vec<u32> = (0..kb_core::info(&bytes).map_err(|e| e.to_string())?.page_count).collect();
+  let pdf = |suffix: &str, data: Vec<u8>| -> Result<Vec<String>, String> {
+    let out = free_path(dir, &format!("{stem}{suffix}"), "pdf");
+    std::fs::write(&out, data).map_err(|e| e.to_string())?;
+    Ok(vec![out.display().to_string()])
+  };
+  let e = |e: kb_core::KbError| e.to_string();
+  match action {
+    BatchAction::Compress { level } => pdf(" (compressé)", kb_core::compress(&bytes, *level).map_err(e)?.0),
+    BatchAction::Ocr { languages } => {
+      let dir_t = tessdata.ok_or("modèles OCR introuvables")?;
+      let langs = if languages.is_empty() { "fra+eng".to_string() } else { languages.join("+") };
+      pdf(" (OCR)", kb_core::make_searchable(&bytes, None, dir_t, &langs, |_, _| {}).map_err(e)?.0)
+    }
+    BatchAction::Protect { options } => pdf(" (protégé)", kb_core::protect(&bytes, options).map_err(e)?),
+    BatchAction::Watermark { watermark } => pdf(" (filigrane)", kb_core::add_watermark(&bytes, watermark).map_err(e)?),
+    BatchAction::HeaderFooter { spec } => {
+      let mut spec = spec.clone();
+      if spec.file.is_empty() {
+        spec.file = path.file_name().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default();
+      }
+      pdf(" (numéroté)", kb_core::add_header_footer(&bytes, &spec).map_err(e)?)
+    }
+    BatchAction::Convert { target } => match target {
+      ConvertTarget::Images { format, dpi } => {
+        let mut written = vec![];
+        let width = all.len().to_string().len();
+        kb_core::to_images(&bytes, &all, *dpi, *format, |_, p, data| {
+          let out = free_path(dir, &format!("{stem} p{:0width$}", p + 1), format.extension());
+          std::fs::write(&out, data).map_err(|e| kb_core::KbError::Image(e.to_string()))?;
+          written.push(out.display().to_string());
+          Ok(())
+        })
+        .map_err(e)?;
+        Ok(written)
+      }
+      other => {
+        let (data, ext) = match other {
+          ConvertTarget::Text => (kb_core::to_text(&bytes, &all).map_err(e)?.into_bytes(), "txt"),
+          ConvertTarget::Word => (kb_core::to_docx(&bytes, &all, |_, _| {}).map_err(e)?, "docx"),
+          _ => (kb_core::to_xlsx(&bytes, &all, |_, _| {}).map_err(e)?, "xlsx"),
+        };
+        let out = free_path(dir, &stem, ext);
+        std::fs::write(&out, data).map_err(|e| e.to_string())?;
+        Ok(vec![out.display().to_string()])
+      }
+    },
+  }
+}
+
+/// Applies one action to many PDF files; results go to `dir`, originals are untouched.
+#[tauri::command]
+pub async fn batch_process(app: tauri::AppHandle, paths: Vec<String>, action: BatchAction, dir: String) -> Result<Vec<BatchResult>, String> {
+  use tauri::Emitter;
+  let tessdata = if matches!(action, BatchAction::Ocr { .. }) { Some(tessdata_dir(&app)?) } else { None };
+  tauri::async_runtime::spawn_blocking(move || {
+    let dir = PathBuf::from(dir);
+    std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    let mut results = vec![];
+    for (n, p) in paths.iter().enumerate() {
+      let path = PathBuf::from(p);
+      let file = path.file_name().map(|s| s.to_string_lossy().into_owned()).unwrap_or_else(|| p.clone());
+      let _ = app.emit("batch-progress", BatchProgress { done: n, total: paths.len(), file: file.clone() });
+      let r = batch_one(&path, &action, &dir, tessdata.as_deref());
+      results.push(match r {
+        Ok(outputs) => BatchResult { file, outputs, error: None },
+        Err(error) => BatchResult { file, outputs: vec![], error: Some(error) },
+      });
+    }
+    Ok::<_, String>(results)
+  })
+  .await
+  .map_err(|e| e.to_string())?
+}
+
+// ---------------------------------------------------------------- compare
+
+/// Text differences between two open documents.
+#[tauri::command]
+pub async fn compare_docs(lib: State<'_, Library>, old: String, new: String) -> Result<kb_core::Comparison, String> {
+  let a = lib.bytes(&old)?;
+  let b = lib.bytes(&new)?;
+  tauri::async_runtime::spawn_blocking(move || kb_core::compare(&a, &b))
+    .await
+    .map_err(|e| e.to_string())?
+    .map_err(|e| e.to_string())
+}

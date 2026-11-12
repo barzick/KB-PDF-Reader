@@ -1,0 +1,30 @@
+[package]
+name = "kb-core"
+version = "0.1.0"
+edition = "2021"
+description = "Moteur PDF de KB PDF Reader (au-dessus de PDFium)"
+
+[dependencies]
+pdfium-render = "0.9"
+image = { version = "0.25", default-features = false, features = ["png", "jpeg", "tiff", "webp", "bmp"] }
+thiserror = "2"
+serde = { version = "1", features = ["derive"] }
+fontdb = "0.24"
+ureq = "2"
+ttf-parser = "0.25"
+lopdf = "0.38"
+getrandom = "0.3"
+similar = "2"
+zip = { version = "8", default-features = false, features = ["deflate"] }
+rust_xlsxwriter = { version = "0.102", default-features = false }
+unicode-normalization = "0.1"
+encoding_rs = "0.8"
+tesseract-rs = { version = "0.4", optional = true }
+
+[features]
+default = ["ocr"]
+ocr = ["dep:tesseract-rs"]
+# Link the Tesseract installed on the machine instead of compiling it (dev only).
+system-tesseract = ["ocr", "tesseract-rs/use-system-tesseract"]
+
+[dev-dependencies]

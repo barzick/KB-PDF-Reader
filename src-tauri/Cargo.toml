@@ -1,0 +1,34 @@
+[package]
+name = "kb-pdf-reader"
+version = "0.1.0"
+description = "KB PDF Reader - lecteur et éditeur PDF"
+authors = ["Kevin Barzic"]
+license-file = "../LICENSE.md"
+repository = ""
+edition = "2021"
+rust-version = "1.90"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[lib]
+name = "app_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2.7.4" }
+
+[dependencies]
+serde_json = "1.0"
+serde = { version = "1.0", features = ["derive"] }
+log = "0.4"
+tauri = { version = "2.12.5" }
+tauri-plugin-log = "2"
+tauri-plugin-dialog = "2"
+tauri-plugin-opener = "2"
+kb-core = { path = "../crates/kb-core" }
+parking_lot = "0.12"
+ureq = { version = "2", features = ["json"] }
+
+[features]
+# Use the Tesseract installed on the machine (dev containers without GitHub access).
+system-tesseract = ["kb-core/system-tesseract"]
