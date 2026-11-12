@@ -48,6 +48,10 @@ pub fn run() {
       commands::insert_blank,
       commands::page_text,
       commands::search_doc,
+      commands::list_annots,
+      commands::add_annot,
+      commands::delete_annot,
+      commands::set_note,
     ])
     .run(tauri::generate_context!())
     .expect("error while running KB PDF Reader");

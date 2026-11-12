@@ -97,6 +97,26 @@ export interface SearchHit {
   context: string
 }
 
+export type Rgb = [number, number, number]
+export type Rect = [number, number, number, number]
+
+export type NewAnnot =
+  | { kind: 'highlight' | 'underline' | 'strike_out'; rects: Rect[]; color: Rgb }
+  | { kind: 'note'; x: number; y: number; text: string; color: Rgb }
+  | { kind: 'free_text'; rect: Rect; text: string; size: number; color: Rgb; border: boolean }
+  | { kind: 'square' | 'circle'; rect: Rect; color: Rgb; width: number; fill: Rgb | null }
+  | { kind: 'line'; from: [number, number]; to: [number, number]; color: Rgb; width: number; arrow: boolean }
+  | { kind: 'ink'; strokes: [number, number][][]; color: Rgb; width: number }
+  | { kind: 'stamp'; rect: Rect; label: string; color: Rgb }
+
+export interface AnnotInfo {
+  index: number
+  subtype: string
+  rect: Rect
+  contents: string
+  color: Rgb | null
+}
+
 export type PageFormat = 'a4' | 'a3' | 'a5' | 'letter' | 'legal' | 'fit'
 
 export interface AssemblePage {
@@ -131,6 +151,11 @@ export const api = {
   createBlank: (count: number, format: PageFormat, landscape: boolean) =>
     invoke<DocMeta>('create_blank', { count, format, landscape }),
   insertBlank: (id: string, at: number) => invoke<DocMeta>('insert_blank', { id, at }),
+  listAnnots: (id: string, page: number) => invoke<AnnotInfo[]>('list_annots', { id, page }),
+  addAnnot: (id: string, page: number, annot: NewAnnot) => invoke<DocMeta>('add_annot', { id, page, annot }),
+  deleteAnnot: (id: string, page: number, index: number) => invoke<DocMeta>('delete_annot', { id, page, index }),
+  setNote: (id: string, page: number, index: number, text: string) =>
+    invoke<DocMeta>('set_note', { id, page, index, text }),
   pageText: (id: string, page: number) => invoke<PageText>('page_text', { id, page }),
   searchDoc: (id: string, query: string, matchCase: boolean) =>
     invoke<SearchHit[]>('search_doc', { id, query, matchCase }),

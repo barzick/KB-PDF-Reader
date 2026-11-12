@@ -487,3 +487,35 @@ pub async fn search_doc(
     .map_err(|e| e.to_string())?
     .map_err(|e| e.to_string())
 }
+
+// ---------------------------------------------------------------- annotations
+
+#[tauri::command]
+pub async fn list_annots(lib: State<'_, Library>, id: String, page: u32) -> Result<Vec<kb_core::AnnotInfo>, String> {
+  let bytes = lib.bytes(&id)?;
+  kb_core::list_annotations(&bytes, page).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn add_annot(lib: State<'_, Library>, id: String, page: u32, annot: kb_core::NewAnnot) -> Result<DocMeta, String> {
+  let bytes = lib.bytes(&id)?;
+  let out = tauri::async_runtime::spawn_blocking(move || kb_core::add_annotation(&bytes, page, &annot))
+    .await
+    .map_err(|e| e.to_string())?
+    .map_err(|e| e.to_string())?;
+  lib.update(&id, out)
+}
+
+#[tauri::command]
+pub async fn delete_annot(lib: State<'_, Library>, id: String, page: u32, index: usize) -> Result<DocMeta, String> {
+  let bytes = lib.bytes(&id)?;
+  let out = kb_core::delete_annotation(&bytes, page, index).map_err(|e| e.to_string())?;
+  lib.update(&id, out)
+}
+
+#[tauri::command]
+pub async fn set_note(lib: State<'_, Library>, id: String, page: u32, index: usize, text: String) -> Result<DocMeta, String> {
+  let bytes = lib.bytes(&id)?;
+  let out = kb_core::set_note_text(&bytes, page, index, &text).map_err(|e| e.to_string())?;
+  lib.update(&id, out)
+}

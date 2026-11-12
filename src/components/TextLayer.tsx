@@ -18,10 +18,14 @@ interface Props {
   selection: Selection | null
   onSelect: (s: Selection | null, text: PageText | null) => void
   onCopy: () => void
+  /** Called when the mouse is released after selecting (annotation tools). */
+  onSelectEnd?: () => void
+  /** Hide the "Copier" chip (annotation tools act on the selection instead). */
+  noChip?: boolean
 }
 
 /** Text selection and search highlights over a page. */
-export function TextLayer({ docId, version, page, pageHeight, scale, hits, selection, onSelect, onCopy }: Props) {
+export function TextLayer({ docId, version, page, pageHeight, scale, hits, selection, onSelect, onCopy, onSelectEnd, noChip }: Props) {
   const [dragging, setDragging] = useState(false)
   const [text, setText] = useState<PageText | null>(null)
   const anchor = useRef<number | null>(null)
@@ -73,7 +77,9 @@ export function TextLayer({ docId, version, page, pageHeight, scale, hits, selec
         if (e.detail === 2) {
           const [a, b] = wordAround(text, i)
           anchor.current = null
-          return onSelect({ page, start: a, end: b }, text)
+          onSelect({ page, start: a, end: b }, text)
+          window.setTimeout(() => onSelectEnd?.(), 0)
+          return
         }
         if (e.shiftKey && sel) {
           anchor.current = sel.start
@@ -90,15 +96,17 @@ export function TextLayer({ docId, version, page, pageHeight, scale, hits, selec
         if (i !== null && (i !== anchor.current || sel)) onSelect({ page, start: anchor.current, end: i }, text)
       }}
       onMouseUp={() => {
+        const was = anchor.current !== null
         anchor.current = null
         setDragging(false)
+        if (was) window.setTimeout(() => onSelectEnd?.(), 0)
       }}
     >
       {hits.flatMap(({ hit, active }, n) =>
         hit.rects.map((b, k) => rect(b, active ? 'hit active' : 'hit', `h${n}-${k}`)),
       )}
       {selRects.map((b, k) => rect(b, 'sel', `s${k}`))}
-      {!dragging && selRects.length > 0 && (
+      {!dragging && !noChip && selRects.length > 0 && (
         <button
           className="primary copy-chip small"
           style={{ left: selRects[0][0] * scale, top: Math.max(0, (pageHeight - selRects[0][3]) * scale - 30) }}

@@ -215,3 +215,55 @@ fn search_and_page_text() {
     assert_eq!(search(&doc, "numero", false).unwrap().len(), 1, "sans accents");
     assert!(search(&doc, "FACTURE", true).unwrap().is_empty());
 }
+
+/// Fraction of non-white pixels of a page area (PDF points), rendered at 1 px/pt.
+fn ink(pdf: &[u8], rect: [f32; 4]) -> f32 {
+    let png = render_png(pdf, 0, 595).unwrap();
+    let img = image::load_from_memory(&png).unwrap().to_rgb8();
+    let h = img.height() as f32;
+    let (mut n, mut dark) = (0, 0);
+    for y in (h - rect[3]).max(0.0) as u32..(h - rect[1]).min(h) as u32 {
+        for x in rect[0].max(0.0) as u32..(rect[2] as u32).min(img.width()) {
+            n += 1;
+            let p = img.get_pixel(x, y).0;
+            if p[0] < 230 || p[1] < 230 || p[2] < 230 {
+                dark += 1;
+            }
+        }
+    }
+    dark as f32 / n.max(1) as f32
+}
+
+#[test]
+fn annotations_show_list_and_delete() {
+    setup();
+    let doc = blank_document(1, PageFormat::A4, false).unwrap();
+    let all = vec![
+        (NewAnnot::Highlight { rects: vec![[50.0, 700.0, 200.0, 715.0]], color: [255, 230, 0] }, [60.0, 702.0, 190.0, 713.0]),
+        (NewAnnot::Underline { rects: vec![[50.0, 650.0, 200.0, 665.0]], color: [0, 0, 255] }, [60.0, 650.0, 190.0, 653.0]),
+        (NewAnnot::StrikeOut { rects: vec![[50.0, 600.0, 200.0, 615.0]], color: [255, 0, 0] }, [60.0, 606.0, 190.0, 609.0]),
+        (NewAnnot::Note { x: 300.0, y: 720.0, text: "Vérifier le montant".into(), color: [255, 220, 80] }, [302.0, 702.0, 318.0, 718.0]),
+        (NewAnnot::FreeText { rect: [300.0, 600.0, 500.0, 680.0], text: "Bonjour à tous, ceci est une zone de texte".into(), size: 14.0, color: [0, 0, 0], border: true }, [300.0, 600.0, 500.0, 680.0]),
+        (NewAnnot::Square { rect: [50.0, 450.0, 150.0, 550.0], color: [255, 0, 0], width: 2.0, fill: Some([200, 230, 255]) }, [60.0, 460.0, 140.0, 540.0]),
+        (NewAnnot::Circle { rect: [200.0, 450.0, 300.0, 550.0], color: [0, 128, 0], width: 3.0, fill: None }, [200.0, 450.0, 300.0, 550.0]),
+        (NewAnnot::Line { from: [350.0, 450.0], to: [500.0, 550.0], color: [0, 0, 0], width: 2.0, arrow: true }, [350.0, 450.0, 500.0, 550.0]),
+        (NewAnnot::Ink { strokes: vec![vec![[50.0, 300.0], [100.0, 350.0], [150.0, 300.0]]], color: [0, 0, 200], width: 3.0 }, [50.0, 295.0, 150.0, 355.0]),
+        (NewAnnot::Stamp { rect: [300.0, 300.0, 500.0, 360.0], label: "Approuvé".into(), color: [200, 0, 0] }, [300.0, 300.0, 500.0, 360.0]),
+    ];
+    let mut pdf = doc.clone();
+    for (a, area) in &all {
+        let before = ink(&pdf, *area);
+        pdf = add_annotation(&pdf, 0, a).unwrap();
+        let after = ink(&pdf, *area);
+        assert!(after > before + 0.02, "{a:?} invisible ({before} → {after})");
+    }
+    let list = list_annotations(&pdf, 0).unwrap();
+    assert_eq!(list.len(), all.len());
+    assert_eq!(list[3].subtype, "Text");
+    assert_eq!(list[3].contents, "Vérifier le montant");
+    let pdf = set_note_text(&pdf, 0, list[3].index, "OK").unwrap();
+    assert_eq!(list_annotations(&pdf, 0).unwrap()[3].contents, "OK");
+    let pdf = delete_annotation(&pdf, 0, list[0].index).unwrap();
+    assert_eq!(list_annotations(&pdf, 0).unwrap().len(), all.len() - 1);
+    assert!(ink(&pdf, [60.0, 702.0, 190.0, 713.0]) < 0.01, "surlignage supprimé");
+}

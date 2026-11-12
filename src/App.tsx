@@ -7,8 +7,11 @@ import { EditLayer } from './components/EditLayer'
 import { OcrDialog } from './components/OcrDialog'
 import { NewDialog } from './components/NewDialog'
 import { Menu } from './components/Menu'
+import { AnnotToolbar, MARKUP_TOOLS, type AnnotTool } from './components/AnnotToolbar'
+import { AnnotLayer } from './components/AnnotLayer'
+import { lineRects } from './lib/pageText'
 import { LicenseDialog, licenceAccepted } from './components/LicenseDialog'
-import type { EditMode, PageText, SearchHit, TextBlock } from './lib/api'
+import type { EditMode, NewAnnot, PageText, Rgb, SearchHit, TextBlock } from './lib/api'
 import { TextLayer, type Selection } from './components/TextLayer'
 import { SearchBar } from './components/SearchBar'
 import { sliceText } from './lib/pageText'
@@ -37,6 +40,12 @@ export default function App() {
   const [ocr, setOcr] = useState<(OcrStatus & { key: string }) | null>(null)
   const [ocrOpen, setOcrOpen] = useState(false)
   const [newOpen, setNewOpen] = useState(false)
+  const [annotating, setAnnotating] = useState(false)
+  const [tool, setTool] = useState<AnnotTool>('highlight')
+  const [annotColor, setAnnotColor] = useState<Rgb>([255, 230, 0])
+  const [annotWidth, setAnnotWidth] = useState(2)
+  const [stamp, setStamp] = useState('Approuvé')
+  const selectionRef = useRef<{ sel: Selection; text: PageText } | null>(null)
   const [licence, setLicence] = useState<'first' | 'about' | null>(() => (licenceAccepted() ? null : 'first'))
   const [bannerHidden, setBannerHidden] = useState<Set<string>>(new Set())
   const [selection, setSelection] = useState<{ sel: Selection; text: PageText } | null>(null)
@@ -341,6 +350,24 @@ export default function App() {
     return true
   }
 
+  selectionRef.current = selection
+
+  const addAnnot = async (page: number, a: NewAnnot) => {
+    if (!doc) return
+    const meta = await run('Annotation…', () => api.addAnnot(doc.id, page, a))
+    if (meta) replaceDoc(meta)
+  }
+
+  // Highlight / underline / strike out the text just selected.
+  const markSelection = async () => {
+    const s = selectionRef.current
+    if (!annotating || !MARKUP_TOOLS.includes(tool) || !s) return
+    const { sel, text } = s
+    const rects = lineRects(text.boxes.slice(Math.min(sel.start, sel.end), Math.max(sel.start, sel.end) + 1))
+    setSelection(null)
+    if (rects.length) await addAnnot(sel.page, { kind: tool as 'highlight', rects, color: annotColor })
+  }
+
   const runOcr = async (languages: string[], pages: number[] | null) => {
     if (!doc) return
     setOcrOpen(false)
@@ -486,11 +513,25 @@ export default function App() {
         <span className="sep" />
         <button
           className={editing ? 'on' : ''}
-          onClick={() => setEditing((v) => !v)}
+          onClick={() => {
+            setEditing((v) => !v)
+            setAnnotating(false)
+          }}
           disabled={!doc}
           title="Cliquer sur un paragraphe pour le modifier"
         >
           Modifier le texte
+        </button>
+        <button
+          className={annotating ? 'on' : ''}
+          onClick={() => {
+            setAnnotating((v) => !v)
+            setEditing(false)
+          }}
+          disabled={!doc}
+          title="Surligner, commenter, dessiner, tamponner"
+        >
+          Annoter
         </button>
         <button onClick={() => setSearchOpen(true)} disabled={!doc} title="Rechercher (Ctrl/⌘+F)">Rechercher</button>
         <button onClick={undo} disabled={!doc} title="Annuler (Ctrl/⌘+Z)">↶</button>
@@ -585,6 +626,26 @@ export default function App() {
                 <button className="icon" aria-label="Masquer" onClick={() => setBannerHidden(new Set(bannerHidden).add(doc.id))}>✕</button>
               </div>
             )}
+            {annotating && (
+              <AnnotToolbar
+                tool={tool}
+                color={annotColor}
+                width={annotWidth}
+                stamp={stamp}
+                onTool={(t) => {
+                  setTool(t)
+                  // Sensible default colours per tool.
+                  if (t === 'highlight') setAnnotColor([255, 230, 0])
+                  else if (t === 'stamp' || t === 'strike_out') setAnnotColor([220, 30, 30])
+                  else if (t !== 'note' && t !== 'select' && 0.299 * annotColor[0] + 0.587 * annotColor[1] + 0.114 * annotColor[2] > 160)
+                    setAnnotColor([30, 80, 220]) // light colours are hard to see as lines
+                }}
+                onColor={setAnnotColor}
+                onWidth={setAnnotWidth}
+                onStamp={setStamp}
+                onClose={() => setAnnotating(false)}
+              />
+            )}
             {searchOpen && (
               <SearchBar
                 query={query}
@@ -623,6 +684,30 @@ export default function App() {
                         selection={selection?.sel ?? null}
                         onSelect={(sel, text) => setSelection(sel && text ? { sel, text } : null)}
                         onCopy={copySelection}
+                        onSelectEnd={markSelection}
+                        noChip={annotating && MARKUP_TOOLS.includes(tool)}
+                      />
+                    )}
+                    {annotating && Math.abs(i - current) <= 2 && (
+                      <AnnotLayer
+                        docId={doc.id}
+                        version={doc.version}
+                        page={i}
+                        pageHeight={p.height}
+                        scale={scale}
+                        tool={tool}
+                        color={annotColor}
+                        width={annotWidth}
+                        stamp={stamp}
+                        onAdd={addAnnot}
+                        onDelete={async (pg, index) => {
+                          const meta = await run('Suppression…', () => api.deleteAnnot(doc.id, pg, index))
+                          if (meta) replaceDoc(meta)
+                        }}
+                        onNote={async (pg, index, text) => {
+                          const meta = await run('Enregistrement…', () => api.setNote(doc.id, pg, index, text))
+                          if (meta) replaceDoc(meta)
+                        }}
                       />
                     )}
                     {editing && Math.abs(i - current) <= 2 && (

@@ -230,3 +230,28 @@ button.on { background: var(--accent-soft); color: var(--accent); }
 .licence-text p { margin: 2px 0; white-space: pre-wrap; }
 .licence-text .gap { height: 6px; }
 .accept { display: flex; gap: 6px; align-items: center; margin-right: auto; }
+
+/* Annotations */
+.annot-bar {
+  display: flex; gap: 4px; align-items: center; padding: 4px 10px; background: var(--panel);
+  border-bottom: 1px solid var(--line); overflow-x: auto; scrollbar-width: none;
+}
+.annot-bar button { white-space: nowrap; flex-shrink: 0; padding: 4px 8px; }
+.annot-bar .swatch { width: 20px; height: 20px; padding: 0; border-radius: 50%; border: 2px solid var(--panel); box-shadow: 0 0 0 1px var(--line); }
+.annot-bar .swatch.on { box-shadow: 0 0 0 2px var(--accent); }
+.annot-bar label { display: flex; gap: 4px; align-items: center; }
+.annot-layer { position: absolute; inset: 0; }
+.annot-layer.tool-select, .annot-layer.tool-note, .annot-layer.tool-stamp { cursor: pointer; }
+.annot-layer.tool-free_text, .annot-layer.tool-square, .annot-layer.tool-circle, .annot-layer.tool-arrow, .annot-layer.tool-ink { cursor: crosshair; }
+.annot-hit { position: absolute; border-radius: 2px; }
+.annot-layer.tool-select .annot-hit:hover, .annot-hit.picked { outline: 2px dashed var(--accent); background: rgb(15 118 110 / 0.06); }
+.annot-preview { position: absolute; border: 1.5px dashed var(--accent); pointer-events: none; }
+.annot-preview.round { border-radius: 50%; }
+.annot-svg { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; overflow: visible; }
+.annot-input {
+  position: absolute; z-index: 7; width: 260px; background: var(--panel); border: 1px solid var(--line);
+  border-radius: 8px; box-shadow: var(--shadow); padding: 8px; display: flex; flex-direction: column; gap: 6px;
+}
+.annot-input textarea { width: 100%; resize: vertical; font: inherit; }
+.annot-input .row { display: flex; gap: 6px; justify-content: flex-end; align-items: center; }
+.annot-input p { margin: 0; white-space: pre-wrap; }

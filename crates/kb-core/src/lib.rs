@@ -12,7 +12,10 @@ use std::sync::OnceLock;
 use pdfium_render::prelude::*;
 use serde::Serialize;
 
+mod annot;
 mod create;
+mod std14;
+pub use annot::{add_annotation, delete_annotation, list_annotations, set_note_text, AnnotInfo, NewAnnot};
 mod edit;
 mod fonts;
 #[cfg(feature = "ocr")]
