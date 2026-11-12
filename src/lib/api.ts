@@ -85,6 +85,18 @@ export interface OcrSummary {
   confidence: number
 }
 
+export interface PageText {
+  text: string
+  /** [left, bottom, right, top] in PDF points for each character (zeros for inferred spaces). */
+  boxes: [number, number, number, number][]
+}
+
+export interface SearchHit {
+  page: number
+  rects: [number, number, number, number][]
+  context: string
+}
+
 export type PageFormat = 'a4' | 'a3' | 'a5' | 'letter' | 'legal' | 'fit'
 
 export interface AssemblePage {
@@ -119,6 +131,9 @@ export const api = {
   createBlank: (count: number, format: PageFormat, landscape: boolean) =>
     invoke<DocMeta>('create_blank', { count, format, landscape }),
   insertBlank: (id: string, at: number) => invoke<DocMeta>('insert_blank', { id, at }),
+  pageText: (id: string, page: number) => invoke<PageText>('page_text', { id, page }),
+  searchDoc: (id: string, query: string, matchCase: boolean) =>
+    invoke<SearchHit[]>('search_doc', { id, query, matchCase }),
 }
 
 export const IMAGE_EXTENSIONS = ['jpg', 'jpeg', 'png', 'tif', 'tiff', 'webp', 'bmp']

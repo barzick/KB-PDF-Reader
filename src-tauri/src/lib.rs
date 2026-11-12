@@ -45,6 +45,8 @@ pub fn run() {
       commands::create_from_images,
       commands::create_blank,
       commands::insert_blank,
+      commands::page_text,
+      commands::search_doc,
     ])
     .run(tauri::generate_context!())
     .expect("error while running KB PDF Reader");

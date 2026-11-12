@@ -462,3 +462,28 @@ pub async fn insert_blank(lib: State<'_, Library>, id: String, at: u32) -> Resul
   let out = kb_core::insert_blank_page(&bytes, at).map_err(|e| e.to_string())?;
   lib.update(&id, out)
 }
+
+// ---------------------------------------------------------------- text
+
+#[tauri::command]
+pub async fn page_text(lib: State<'_, Library>, id: String, page: u32) -> Result<kb_core::PageText, String> {
+  let bytes = lib.bytes(&id)?;
+  tauri::async_runtime::spawn_blocking(move || kb_core::page_text(&bytes, page))
+    .await
+    .map_err(|e| e.to_string())?
+    .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn search_doc(
+  lib: State<'_, Library>,
+  id: String,
+  query: String,
+  match_case: bool,
+) -> Result<Vec<kb_core::SearchHit>, String> {
+  let bytes = lib.bytes(&id)?;
+  tauri::async_runtime::spawn_blocking(move || kb_core::search(&bytes, &query, match_case))
+    .await
+    .map_err(|e| e.to_string())?
+    .map_err(|e| e.to_string())
+}

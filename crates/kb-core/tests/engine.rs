@@ -200,3 +200,18 @@ fn ocr_makes_scans_searchable_and_editable() {
     let (_, again) = make_searchable(&out, None, &tessdata, "fra", |_, _| {}).unwrap();
     assert!(again.pages.is_empty() && again.skipped == vec![1, 2]);
 }
+
+#[test]
+fn search_and_page_text() {
+    setup();
+    let doc = new_text_document(&["Facture numéro 12", "Rien ici", "La facture suit"]).unwrap();
+    let t = page_text(&doc, 0).unwrap();
+    assert!(t.text.contains("Facture numéro 12"));
+    assert_eq!(t.text.chars().count(), t.boxes.len());
+    let hits = search(&doc, "FACTURE", false).unwrap();
+    assert_eq!(hits.iter().map(|h| h.page).collect::<Vec<_>>(), vec![0, 2]);
+    let r = hits[0].rects[0];
+    assert!(r[0] > 70.0 && r[0] < 75.0 && r[1] > 750.0 && r[3] < 790.0, "{r:?}");
+    assert_eq!(search(&doc, "numero", false).unwrap().len(), 1, "sans accents");
+    assert!(search(&doc, "FACTURE", true).unwrap().is_empty());
+}

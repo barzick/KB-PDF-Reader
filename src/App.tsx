@@ -6,7 +6,11 @@ import { FontsPanel } from './components/FontsPanel'
 import { EditLayer } from './components/EditLayer'
 import { OcrDialog } from './components/OcrDialog'
 import { NewDialog } from './components/NewDialog'
-import type { EditMode, TextBlock } from './lib/api'
+import { Menu } from './components/Menu'
+import type { EditMode, PageText, SearchHit, TextBlock } from './lib/api'
+import { TextLayer, type Selection } from './components/TextLayer'
+import { SearchBar } from './components/SearchBar'
+import { sliceText } from './lib/pageText'
 
 interface OpenDoc extends DocMeta {
   /** Bumped whenever the document content changes, to refresh page images. */
@@ -33,6 +37,13 @@ export default function App() {
   const [ocrOpen, setOcrOpen] = useState(false)
   const [newOpen, setNewOpen] = useState(false)
   const [bannerHidden, setBannerHidden] = useState<Set<string>>(new Set())
+  const [selection, setSelection] = useState<{ sel: Selection; text: PageText } | null>(null)
+  const [searchOpen, setSearchOpen] = useState(false)
+  const [query, setQuery] = useState('')
+  const [matchCase, setMatchCase] = useState(false)
+  const [hits, setHits] = useState<SearchHit[]>([])
+  const [hitIndex, setHitIndex] = useState(0)
+  const [searching, setSearching] = useState(false)
   const viewer = useRef<HTMLDivElement>(null)
   const [viewerWidth, setViewerWidth] = useState(800)
 
@@ -134,6 +145,36 @@ export default function App() {
     return () => unlisten?.()
   }, [])
 
+  // Search (debounced), redone when the document changes.
+  useEffect(() => {
+    if (!doc || !searchOpen || !query.trim()) {
+      setHits([])
+      setSearching(false)
+      return
+    }
+    let live = true
+    setSearching(true)
+    const t = window.setTimeout(() => {
+      api
+        .searchDoc(doc.id, query, matchCase)
+        .then((h) => {
+          if (!live) return
+          setHits(h)
+          setHitIndex(0)
+          if (h.length) showHit(h[0])
+        })
+        .catch(() => live && setHits([]))
+        .finally(() => live && setSearching(false))
+    }, 250)
+    return () => {
+      live = false
+      window.clearTimeout(t)
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [doc?.id, doc?.version, searchOpen, query, matchCase])
+
+  useEffect(() => setSelection(null), [doc?.id, doc?.version, editing])
+
   // Track viewer width for "fit width".
   useEffect(() => {
     const el = viewer.current
@@ -173,6 +214,38 @@ export default function App() {
   const goTo = (i: number) => {
     const el = viewer.current?.querySelector<HTMLElement>(`[data-page="${i}"]`)
     el?.scrollIntoView({ block: 'start' })
+  }
+
+  const showHit = (h: SearchHit) => {
+    const el = viewer.current
+    const pageEl = el?.querySelector<HTMLElement>(`[data-page="${h.page}"]`)
+    if (!el || !pageEl || !doc) return
+    const r = h.rects[0]
+    const y = r ? (doc.info.pages[h.page].height - r[3]) * scale : 0
+    el.scrollTo({ top: pageEl.offsetTop + y - el.clientHeight / 3 })
+  }
+
+  const stepHit = (dir: 1 | -1) => {
+    if (!hits.length) return
+    const i = (hitIndex + dir + hits.length) % hits.length
+    setHitIndex(i)
+    showHit(hits[i])
+  }
+
+  const copySelection = async () => {
+    if (!selection) return
+    const text = sliceText(selection.text, selection.sel.start, selection.sel.end)
+    try {
+      await navigator.clipboard.writeText(text)
+    } catch {
+      const ta = document.createElement('textarea')
+      ta.value = text
+      document.body.appendChild(ta)
+      ta.select()
+      document.execCommand('copy')
+      ta.remove()
+    }
+    notify(`Copié : ${text.length > 60 ? text.slice(0, 60) + '…' : text}`)
   }
 
   const setZoomStep = (dir: 1 | -1) => {
@@ -351,6 +424,11 @@ export default function App() {
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       const mod = e.metaKey || e.ctrlKey
+      const typing = e.target instanceof HTMLTextAreaElement || e.target instanceof HTMLInputElement
+      if (mod && e.key === 'f' && doc) return (e.preventDefault(), setSearchOpen(true))
+      if (e.key === 'F3' && searchOpen) return (e.preventDefault(), stepHit(e.shiftKey ? -1 : 1))
+      if (mod && e.key === 'c' && !typing && selection) return (e.preventDefault(), copySelection())
+      if (e.key === 'Escape' && selection) setSelection(null)
       if (mod && e.key === 'o') (e.preventDefault(), openDialog())
       else if (mod && e.key === 's') (e.preventDefault(), save(e.shiftKey))
       else if (mod && (e.key === '+' || e.key === '=')) (e.preventDefault(), setZoomStep(1))
@@ -369,12 +447,38 @@ export default function App() {
     <div className="app">
       <header className="toolbar">
         <div className="brand">KB PDF</div>
-        <button onClick={() => setNewOpen(true)} title="Créer un PDF (images, scans, pages vierges)">Nouveau</button>
+        <Menu
+          label="Fichier"
+          items={[
+            { label: 'Nouveau…', hint: 'images, scans, vierge', onClick: () => setNewOpen(true) },
+            { label: 'Ouvrir…', hint: 'Ctrl/⌘+O', onClick: openDialog },
+            '—',
+            { label: 'Enregistrer', hint: 'Ctrl/⌘+S', onClick: () => save(false), disabled: !doc },
+            { label: 'Enregistrer sous…', hint: 'Maj+Ctrl/⌘+S', onClick: () => save(true), disabled: !doc },
+            '—',
+            { label: 'Fusionner des PDF…', onClick: () => setMerging(true) },
+          ]}
+        />
+        <Menu
+          label="Pages"
+          disabled={!doc}
+          items={[
+            { label: 'Pivoter à gauche', onClick: () => rotate(270) },
+            { label: 'Pivoter à droite', onClick: () => rotate(90) },
+            '—',
+            { label: 'Insérer une page vierge', hint: 'après la page actuelle', onClick: insertBlank },
+            { label: 'Extraire dans un nouveau PDF', onClick: extractPages },
+            { label: 'Supprimer', onClick: deletePages, danger: true },
+          ]}
+        />
+        <Menu
+          label="Outils"
+          disabled={!doc}
+          items={[{ label: 'Reconnaître le texte (OCR)…', onClick: () => setOcrOpen(true), disabled: !ocr }]}
+        />
+        <span className="sep" />
         <button onClick={openDialog} title="Ouvrir (Ctrl/⌘+O)">Ouvrir</button>
         <button onClick={() => save(false)} disabled={!doc} title="Enregistrer (Ctrl/⌘+S)">Enregistrer</button>
-        <button onClick={() => save(true)} disabled={!doc}>Enregistrer sous…</button>
-        <span className="sep" />
-        <button onClick={() => setMerging(true)} title="Fusionner plusieurs PDF">Fusionner</button>
         <span className="sep" />
         <button
           className={editing ? 'on' : ''}
@@ -384,20 +488,8 @@ export default function App() {
         >
           Modifier le texte
         </button>
-        <button
-          onClick={() => setOcrOpen(true)}
-          disabled={!doc || !ocr}
-          title="Reconnaître le texte des pages scannées (OCR)"
-        >
-          OCR
-        </button>
+        <button onClick={() => setSearchOpen(true)} disabled={!doc} title="Rechercher (Ctrl/⌘+F)">Rechercher</button>
         <button onClick={undo} disabled={!doc} title="Annuler (Ctrl/⌘+Z)">↶</button>
-        <span className="sep" />
-        <button onClick={() => rotate(270)} disabled={!doc} title="Pivoter à gauche">⟲</button>
-        <button onClick={() => rotate(90)} disabled={!doc} title="Pivoter à droite">⟳</button>
-        <button onClick={insertBlank} disabled={!doc} title="Insérer une page vierge après la page actuelle">+ Page</button>
-        <button onClick={extractPages} disabled={!doc}>Extraire</button>
-        <button onClick={deletePages} disabled={!doc} className="danger">Supprimer</button>
         <span className="grow" />
         {doc && (
           <div className="pager">
@@ -489,6 +581,22 @@ export default function App() {
                 <button className="icon" aria-label="Masquer" onClick={() => setBannerHidden(new Set(bannerHidden).add(doc.id))}>✕</button>
               </div>
             )}
+            {searchOpen && (
+              <SearchBar
+                query={query}
+                matchCase={matchCase}
+                count={hits.length}
+                index={hitIndex}
+                searching={searching}
+                onQuery={setQuery}
+                onMatchCase={setMatchCase}
+                onStep={stepHit}
+                onClose={() => {
+                  setSearchOpen(false)
+                  setHits([])
+                }}
+              />
+            )}
             <section className={`viewer ${editing ? 'editing' : ''}`} ref={viewer} onScroll={onScroll}>
               {doc.info.pages.map((p, i) => (
                 <div key={i} data-page={i} className="page-wrap">
@@ -500,6 +608,19 @@ export default function App() {
                       width={p.width * scale}
                       height={p.height * scale}
                     />
+                    {!editing && (Math.abs(i - current) <= 2 || hits.some((h) => h.page === i)) && (
+                      <TextLayer
+                        docId={doc.id}
+                        version={doc.version}
+                        page={i}
+                        pageHeight={p.height}
+                        scale={scale}
+                        hits={hits.map((hit, n) => ({ hit, active: n === hitIndex })).filter((h) => h.hit.page === i)}
+                        selection={selection?.sel ?? null}
+                        onSelect={(sel, text) => setSelection(sel && text ? { sel, text } : null)}
+                        onCopy={copySelection}
+                      />
+                    )}
                     {editing && Math.abs(i - current) <= 2 && (
                       <EditLayer
                         docId={doc.id}
