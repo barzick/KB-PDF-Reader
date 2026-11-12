@@ -45,3 +45,62 @@ fn info_render_merge_assemble_fonts() {
     assert_eq!(f[0].family, "Helvetica");
     assert_eq!(f[0].pages, vec![1, 2]);
 }
+
+fn any_ttf() -> String {
+    for dir in ["/usr/share/fonts", "/System/Library/Fonts", "C:\\Windows\\Fonts"] {
+        if let Some(p) = walk(std::path::Path::new(dir)) {
+            return p;
+        }
+    }
+    panic!("aucune police TrueType trouvée pour le test");
+}
+
+fn walk(dir: &std::path::Path) -> Option<String> {
+    for e in std::fs::read_dir(dir).ok()?.flatten() {
+        let p = e.path();
+        if p.is_dir() {
+            if let Some(f) = walk(&p) {
+                return Some(f);
+            }
+        } else if p.extension().is_some_and(|x| x.eq_ignore_ascii_case("ttf")) {
+            return Some(p.display().to_string());
+        }
+    }
+    None
+}
+
+#[test]
+fn edit_paragraph_exactly_and_again() {
+    setup();
+    let doc = new_text_document(&["Bonjour le monde"]).unwrap();
+    let blocks = text_blocks(&doc, 0).unwrap();
+    assert_eq!(blocks.len(), 1);
+    assert_eq!(blocks[0].text, "Bonjour le monde");
+
+    let font = any_ttf();
+    let r = replace_block(&doc, 0, &blocks[0], "Au revoir, été 2026", WriteFont::File(font.as_ref()), EditMode::Exact).unwrap();
+    assert!(r.lossless, "l'édition doit garder le reste de la page intact");
+    let after = text_blocks(&r.bytes, 0).unwrap();
+    assert_eq!(after.len(), 1);
+    assert_eq!(after[0].text, "Au revoir, été 2026");
+    assert!((after[0].y - blocks[0].y).abs() < 0.5, "même position");
+
+    // The new text must be editable again.
+    let r2 = replace_block(&r.bytes, 0, &after[0], "Troisième version", WriteFont::File(font.as_ref()), EditMode::Exact).unwrap();
+    assert!(r2.lossless);
+    let again = text_blocks(&r2.bytes, 0).unwrap();
+    assert_eq!(again.iter().map(|b| b.text.as_str()).collect::<Vec<_>>(), vec!["Troisième version"]);
+}
+
+#[test]
+fn shift_below_moves_following_text() {
+    setup();
+    // Two paragraphs on one page.
+    let doc = new_text_document(&["Premier"]).unwrap();
+    let blocks = text_blocks(&doc, 0).unwrap();
+    let long = "mot ".repeat(200);
+    let font = any_ttf();
+    let r = replace_block(&doc, 0, &blocks[0], &long, WriteFont::File(font.as_ref()), EditMode::ShiftBelow).unwrap();
+    assert!(r.extra_lines > 0);
+    assert!(!r.lossless);
+}
