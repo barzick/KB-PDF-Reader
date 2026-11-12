@@ -64,6 +64,9 @@ static PDFIUM: OnceLock<Pdfium> = OnceLock::new();
 /// Loads the PDFium library from `lib_dir` (the folder holding pdfium.dll /
 /// libpdfium.dylib / libpdfium.so). Falls back to the system library search path.
 pub fn init(lib_dir: Option<&Path>) -> Result<()> {
+    // Several threads may start at once (tests, background tasks): bind only once.
+    static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    let _guard = LOCK.lock().unwrap_or_else(|e| e.into_inner());
     if PDFIUM.get().is_some() {
         return Ok(());
     }
