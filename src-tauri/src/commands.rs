@@ -712,3 +712,22 @@ pub async fn add_header_footer(lib: State<'_, Library>, id: String, spec: kb_cor
     .map_err(|e| e.to_string())?;
   lib.update(&id, out)
 }
+
+#[tauri::command]
+pub async fn get_bookmarks(lib: State<'_, Library>, id: String) -> Result<Vec<kb_core::Bookmark>, String> {
+  let bytes = lib.bytes(&id)?;
+  kb_core::bookmarks(&bytes).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn set_bookmarks(lib: State<'_, Library>, id: String, list: Vec<kb_core::Bookmark>) -> Result<DocMeta, String> {
+  let bytes = lib.bytes(&id)?;
+  let out = kb_core::set_bookmarks(&bytes, &list).map_err(|e| e.to_string())?;
+  lib.update(&id, out)
+}
+
+/// Opens the system print dialog for the window (the page shows only the print pages).
+#[tauri::command]
+pub fn print_view(window: tauri::WebviewWindow) -> Result<(), String> {
+  window.print().map_err(|e| e.to_string())
+}

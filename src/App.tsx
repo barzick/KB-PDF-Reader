@@ -11,13 +11,15 @@ import { AnnotToolbar, MARKUP_TOOLS, type AnnotTool } from './components/AnnotTo
 import { AnnotLayer } from './components/AnnotLayer'
 import { lineRects } from './lib/pageText'
 import { LicenseDialog, licenceAccepted } from './components/LicenseDialog'
-import type { CompressLevel, Crop, EditMode, FormField, HeaderFooter, ProtectOptions, NewAnnot, PageText, Rect, Rgb, SearchHit, TextBlock, TextStyle, Watermark } from './lib/api'
+import type { Bookmark, CompressLevel, Crop, EditMode, FormField, HeaderFooter, ProtectOptions, NewAnnot, PageText, Rect, Rgb, SearchHit, TextBlock, TextStyle, Watermark } from './lib/api'
 import { TextLayer, type Selection } from './components/TextLayer'
 import { SearchBar } from './components/SearchBar'
 import { FormLayer } from './components/FormLayer'
 import { PlaceLayer } from './components/PlaceLayer'
 import { TextPlaceLayer } from './components/TextPlaceLayer'
 import { HeaderFooterDialog, WatermarkDialog } from './components/DecorateDialog'
+import { BookmarksPanel } from './components/BookmarksPanel'
+import { PrintDialog, PrintRoot } from './components/Print'
 import { CompressDialog, CropDialog, PasswordDialog, ProtectDialog, SplitDialog } from './components/DocumentDialogs'
 import { SignatureDialog, fromFile, type PlacedImage } from './components/SignatureDialog'
 import { sliceText } from './lib/pageText'
@@ -37,7 +39,9 @@ export default function App() {
   const [fitWidth, setFitWidth] = useState(true)
   const [current, setCurrent] = useState(0)
   const [selected, setSelected] = useState<Set<number>>(new Set())
-  const [side, setSide] = useState<'pages' | 'fonts'>('pages')
+  const [side, setSide] = useState<'pages' | 'bookmarks' | 'fonts'>('pages')
+  const [printOpen, setPrintOpen] = useState(false)
+  const [printJob, setPrintJob] = useState<{ pages: { index: number; width: number; height: number }[]; dpi: number } | null>(null)
   const [merging, setMerging] = useState(false)
   const [busy, setBusy] = useState<string | null>(null)
   const [toast, setToast] = useState<string | null>(null)
@@ -525,6 +529,18 @@ export default function App() {
     if (files) notify(`${files.length} fichier(s) créé(s) dans ${dir}`)
   }
 
+  const saveBookmarks = async (list: Bookmark[]) => {
+    if (!doc) return
+    const meta = await run('Signets…', () => api.setBookmarks(doc.id, list))
+    if (meta) replaceDoc(meta)
+  }
+
+  const startPrint = (pages: number[], dpi: number) => {
+    if (!doc) return
+    setPrintOpen(false)
+    setPrintJob({ pages: pages.map((i) => ({ index: i, ...doc.info.pages[i] })), dpi })
+  }
+
   // Highlight / underline / strike out the text just selected.
   const markSelection = async () => {
     const s = selectionRef.current
@@ -629,6 +645,7 @@ export default function App() {
       if (e.key === 'Escape' && addingText && !typing) setAddingText(false)
       if (mod && e.key === 'o') (e.preventDefault(), openDialog())
       else if (mod && e.key === 's') (e.preventDefault(), save(e.shiftKey))
+      else if (mod && e.key === 'p' && doc) (e.preventDefault(), setPrintOpen(true))
       else if (mod && (e.key === '+' || e.key === '=')) (e.preventDefault(), setZoomStep(1))
       else if (mod && e.key === '-') (e.preventDefault(), setZoomStep(-1))
       else if (mod && e.key === '0') (e.preventDefault(), setFitWidth(true))
@@ -653,6 +670,7 @@ export default function App() {
             '—',
             { label: 'Enregistrer', hint: 'Ctrl/⌘+S', onClick: () => save(false), disabled: !doc },
             { label: 'Enregistrer sous…', hint: 'Maj+Ctrl/⌘+S', onClick: () => save(true), disabled: !doc },
+            { label: 'Imprimer…', hint: 'Ctrl/⌘+P', onClick: () => setPrintOpen(true), disabled: !doc },
             '—',
             { label: 'Fusionner des PDF…', onClick: () => setMerging(true) },
             { label: 'Compresser…', onClick: () => setDocDialog('compress'), disabled: !doc },
@@ -775,6 +793,7 @@ export default function App() {
             <aside className="sidebar">
               <div className="side-tabs">
                 <button className={side === 'pages' ? 'on' : ''} onClick={() => setSide('pages')}>Pages</button>
+                <button className={side === 'bookmarks' ? 'on' : ''} onClick={() => setSide('bookmarks')}>Signets</button>
                 <button className={side === 'fonts' ? 'on' : ''} onClick={() => setSide('fonts')}>Polices</button>
               </div>
               {side === 'pages' ? (
@@ -812,6 +831,8 @@ export default function App() {
                     </div>
                   ))}
                 </div>
+              ) : side === 'bookmarks' ? (
+                <BookmarksPanel docId={doc.id} version={doc.version} current={current} onGo={goTo} onSave={saveBookmarks} />
               ) : (
                 <FontsPanel docId={doc.id} version={doc.version} />
               )}
@@ -1048,6 +1069,22 @@ export default function App() {
       )}
       {docDialog === 'split' && doc && (
         <SplitDialog pageCount={doc.info.page_count} onApply={applySplit} onClose={() => setDocDialog(null)} />
+      )}
+      {printOpen && doc && (
+        <PrintDialog pageCount={doc.info.page_count} current={current} onPrint={startPrint} onClose={() => setPrintOpen(false)} />
+      )}
+      {printJob && doc && (
+        <PrintRoot
+          docId={doc.id}
+          pages={printJob.pages}
+          dpi={printJob.dpi}
+          onProgress={(d, t) => setBusy(d < t ? `Préparation de l'impression… ${d}/${t}` : null)}
+          onDone={(e) => {
+            setBusy(null)
+            setPrintJob(null)
+            if (e) notify(`Impression impossible : ${e}`)
+          }}
+        />
       )}
       {signOpen && <SignatureDialog onClose={() => setSignOpen(null)} onPick={pickedSignature} />}
       <input

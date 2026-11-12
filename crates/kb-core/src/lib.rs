@@ -18,6 +18,8 @@ mod forms;
 mod decorate;
 mod security;
 mod optimize;
+mod outline;
+pub use outline::{bookmarks, set_bookmarks, Bookmark};
 pub use optimize::{compress, crop, CompressLevel, CompressResult, Crop};
 pub use security::{protect, protection, unlock, ProtectOptions, Protection};
 pub use decorate::{add_header_footer, add_text, add_watermark, Align, HeaderFooter, TextStyle, Watermark};

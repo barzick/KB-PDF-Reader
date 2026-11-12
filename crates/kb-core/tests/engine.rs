@@ -459,3 +459,22 @@ fn compress_and_crop() {
     let back = crop(&tight, None, &Crop::Reset).unwrap();
     assert!((info(&back).unwrap().pages[0].width - w0).abs() < 0.5);
 }
+
+#[test]
+fn bookmarks_round_trip() {
+    setup();
+    let doc = new_text_document(&["Un", "Deux", "Trois"]).unwrap();
+    assert!(bookmarks(&doc).unwrap().is_empty());
+    let tree = vec![
+        Bookmark { title: "Introduction".into(), page: Some(0), children: vec![] },
+        Bookmark {
+            title: "Chapitre é".into(),
+            page: Some(1),
+            children: vec![Bookmark { title: "Détail".into(), page: Some(2), children: vec![] }],
+        },
+    ];
+    let with = set_bookmarks(&doc, &tree).unwrap();
+    assert_eq!(bookmarks(&with).unwrap(), tree);
+    let none = set_bookmarks(&with, &[]).unwrap();
+    assert!(bookmarks(&none).unwrap().is_empty());
+}

@@ -154,6 +154,12 @@ export function parsePages(spec: string, count: number): number[] | null {
   return [...out].sort((x, y) => x - y)
 }
 
+export interface Bookmark {
+  title: string
+  page: number | null
+  children: Bookmark[]
+}
+
 export interface ProtectOptions {
   user_password: string
   owner_password: string
@@ -247,6 +253,9 @@ export const api = {
     invoke<DocMeta>('add_text', { id, page, x, y, text, style }),
   addWatermark: (id: string, watermark: Watermark) => invoke<DocMeta>('add_watermark', { id, watermark }),
   addHeaderFooter: (id: string, spec: HeaderFooter) => invoke<DocMeta>('add_header_footer', { id, spec }),
+  getBookmarks: (id: string) => invoke<Bookmark[]>('get_bookmarks', { id }),
+  setBookmarks: (id: string, list: Bookmark[]) => invoke<DocMeta>('set_bookmarks', { id, list }),
+  printView: () => invoke<void>('print_view'),
   listFields: (id: string) => invoke<FormField[]>('list_fields', { id }),
   fillFields: (id: string, values: { name: string; value: string }[]) => invoke<DocMeta>('fill_fields', { id, values }),
   flattenDoc: (id: string) => invoke<DocMeta>('flatten_doc', { id }),
